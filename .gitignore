@@ -1,0 +1,47 @@
+# ---- 依赖 ----
+node_modules/
+
+# ---- 构建产物 ----
+out/
+dist/
+release/
+*.tsbuildinfo
+
+# ---- 本地数据 / 运行时文件 ----
+library.db
+library.db-*
+/data/
+/downloads/
+*.local
+
+# ---- 凭证与敏感信息（切勿提交）----
+booth_cookies.txt
+*.cookies.txt
+.env
+.env.*
+!.env.example
+
+# ---- AI / 本地笔记（仅本地阅读，不发布）----
+AI_Should_Read/
+
+# ---- 临时目录与日志 ----
+.temp/
+.cache/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---- 操作系统生成 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# ---- 编辑器 / IDE ----
+.idea/
+*.swp
+*.swo
+.vscode/

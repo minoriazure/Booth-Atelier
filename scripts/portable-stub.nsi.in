@@ -1,0 +1,98 @@
+; Booth Atelier 便携版启动器 stub（模板，由 scripts/build-portable.mjs 代入构建）
+;
+; 行为：
+;   - 首次运行：把内嵌的 app.7z 解压到 exe 同级 app-cache\<marker>\（marker = 版本号+载荷哈希，仅此一次）
+;   - 之后每次：直接启动缓存目录里的主程序，零解压
+;   - 命令行参数（含深链 booth-library-manager:// URL）原样转发给主程序
+;   - 设置 PORTABLE_EXECUTABLE_DIR = stub 所在目录 → 数据（data/ downloads/）仍落在 exe 同级
+;   - /purge：删除 exe 同级 app-cache\ 后退出
+;
+; 注意：本文件必须以 UTF-8 BOM 保存（含中文文案，Unicode NSIS 要求）——生成步骤由 build-portable.mjs 保证。
+
+Unicode true
+CRCCheck off        ; 80MB stub 自校验会白白拖慢每次启动，关掉
+                    ; 不调 SetCompressor：内嵌 app.7z 已是 7z/LZMA2，默认不压缩正好
+RequestExecutionLevel user
+
+Name "@PRODUCT_NAME@"
+OutFile "@OUT_EXE@"
+; Icon 不指向主程序 exe：makensis 读不了 electron exe 的图标资源（invalid icon file），用 NSIS 默认图标
+BrandingText "Booth Atelier"
+VIProductVersion "@VERSION_X4@"
+VIAddVersionKey "ProductName" "@PRODUCT_NAME@"
+VIAddVersionKey "ProductVersion" "@VERSION@"
+VIAddVersionKey "FileDescription" "Booth Atelier portable launcher"
+VIAddVersionKey "FileVersion" "@VERSION@"
+VIAddVersionKey "LegalCopyright" "UNLICENSED - personal use only"
+
+!include "FileFunc.nsh"
+!addplugindir "@NSIS_PLUGIN_DIR@"   ; nsis7z.dll（来自 nsis-resources）
+
+ShowInstDetails show
+
+Var PARAMS
+Var EXE_DIR
+Var CACHE_ROOT
+Var CACHE_DIR
+
+Section
+  ${GetParameters} $PARAMS
+
+  ; ---- /purge：清掉 exe 同级应用缓存后退出（数据 data/ downloads/ 不受影响） ----
+  ${GetOptions} $PARAMS "/purge" $0
+  IfErrors not_purge
+    RMDir /r "$EXEDIR\app-cache"
+    Quit
+not_purge:
+
+  StrCpy $EXE_DIR $EXEDIR
+  StrCpy $CACHE_ROOT "$EXE_DIR\app-cache"
+  StrCpy $CACHE_DIR "$CACHE_ROOT\@MARKER@"
+
+  ; 缓存命中需要两个文件同时在：主程序 exe + .ready 标记（防半截缓存）
+  IfFileExists "$CACHE_DIR\@APP_EXE@" 0 need_extract
+  IfFileExists "$CACHE_DIR\.ready" cache_ready
+
+need_extract:
+  ; ---- 首次运行 / 缓存不完整：清掉旧版本缓存并解压 ----
+  DetailPrint "首次运行：正在解压应用文件（仅此一次，约 10-30 秒）..."
+  ClearErrors
+  FindFirst $R2 $R3 "$CACHE_ROOT\*"
+cleanup_loop:
+  IfErrors cleanup_done
+  StrCmp $R3 "." cleanup_next
+  StrCmp $R3 ".." cleanup_next
+  StrCmp $R3 "@MARKER@" cleanup_next
+  RMDir /r "$CACHE_ROOT\$R3"
+cleanup_next:
+  ClearErrors
+  FindNext $R2 $R3
+  Goto cleanup_loop
+cleanup_done:
+  FindClose $R2
+
+  ; 解压：直接解到版本化缓存目录。不需要 electron-builder 的 CopyFiles 中转——
+  ; 那是为"覆盖升级运行中的安装目录"设计的原子性；我们是全新目录首解，直接解压即可。
+  ; （CopyFiles /SILENT 实测确定性置错误标志，勿再用）
+  ClearErrors
+  InitPluginsDir            ; 不初始化 $PLUGINSDIR 是空串，File 会往盘根写 \app.7z（实测弹错）
+  CreateDirectory "$CACHE_DIR"
+  SetOutPath "$CACHE_DIR"
+  File /oname=$PLUGINSDIR\app.7z "@APP7Z@"
+  Nsis7z::Extract "$PLUGINSDIR\app.7z"
+  Delete "$PLUGINSDIR\app.7z"
+  IfFileExists "$CACHE_DIR\@APP_EXE@" extract_ok
+    MessageBox MB_ICONSTOP|MB_OK "解压应用文件失败。请删除以下目录后重试，或重新下载本程序：$\r$\n$CACHE_ROOT"
+    Abort
+extract_ok:
+  FileOpen $R4 "$CACHE_DIR\.ready" w
+  FileWrite $R4 "@MARKER@"
+  FileClose $R4
+
+cache_ready:
+  ; 缓存命中路径（含深链二次拉起）要快：隐藏 stub 窗口防闪烁后直接启动
+  System::Call 'user32::ShowWindow(p $HWNDPARENT, i 0)'
+  System::Call 'kernel32::SetEnvironmentVariableW(w "PORTABLE_EXECUTABLE_DIR", w "$EXE_DIR")'
+  Exec '"$CACHE_DIR\@APP_EXE@" $PARAMS'
+  Quit
+SectionEnd
