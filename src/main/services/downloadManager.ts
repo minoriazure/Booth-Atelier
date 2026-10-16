@@ -86,11 +86,11 @@ export class DownloadManager {
    * - 待下载/失败的：直接构造 job 跑
    * 用于「排队中的立即下载」按钮，以及网页端 deeplink 直下（模拟原版行为）。
    */
-  downloadNow(downloadableId: number, source: DownloadSource = 'manual'): 'started' | 'active' | 'missing' {
-    if (this.disposed) return 'missing'
-    if (this.active.has(downloadableId)) return 'active'
+  downloadNow(downloadableId: number, source: DownloadSource = 'manual'): Promise<'started' | 'active' | 'skipped' | 'missing'> {
+    if (this.disposed) return Promise.resolve('missing')
+    if (this.active.has(downloadableId)) return Promise.resolve('active')
     const d = this.repo.getDownloadable(downloadableId)
-    if (!d) return 'missing'
+    if (!d) return Promise.resolve('missing')
 
     let job: Job
     const idx = this.queue.findIndex((j) => j.downloadableId === downloadableId)
@@ -101,10 +101,22 @@ export class DownloadManager {
     }
     // 排队标记保留：下载中/中断后重启都能经 restoreQueue 恢复；runJob 结束时清
     this.repo.setQueuedAt(downloadableId, new Date().toISOString())
-    void this.runJob(job) // 不经 pump —— 绕开 concurrency 上限
+    // 决策点：downloadOne 的 resolve+probe 完成后才 settle（不是下载完成）——
+    // skipped = 本地已下载且指纹一致（未重新下载）；probe 前异常由 runJob finally 兜底 'started'
+    let settle!: (r: 'started' | 'skipped') => void
+    const decided = new Promise<'started' | 'skipped'>((ok) => {
+      settle = ok
+    })
+    let fired = false
+    const decide = (r: 'started' | 'skipped'): void => {
+      if (fired) return
+      fired = true
+      settle(r)
+    }
+    void this.runJob(job, decide) // 不经 pump —— 绕开 concurrency 上限
     this.onQueueChanged?.()
     log.info(`downloadNow: #${downloadableId}（跳过队列与并发限制）`)
-    return 'started'
+    return decided
   }
 
   enqueueItem(itemId: number, source: DownloadSource): number {
@@ -333,8 +345,11 @@ export class DownloadManager {
     }
   }
 
-  private async runJob(job: Job): Promise<void> {
-    if (this.disposed) return
+  private async runJob(job: Job, decide?: (r: 'started' | 'skipped') => void): Promise<void> {
+    if (this.disposed) {
+      decide?.('started')
+      return
+    }
     const recordId = this.repo.addDownloadRecord({
       downloadableId: job.downloadableId,
       itemId: job.itemId,
@@ -348,11 +363,13 @@ export class DownloadManager {
     const label = d?.filename || `#${job.downloadableId}`
 
     try {
-      const result = await this.downloadOne(job, abort.signal, label)
+      const result = await this.downloadOne(job, abort.signal, label, decide)
       if (this.disposed) return // 下载完成但进程退出中：文件已落盘，跳过 DB 写
       // 旧文件归档已在 downloadOne 内、rename 覆盖之前完成（result.archivedPath）
       const archivedPath = result.archivedPath
 
+      // skipped 时也保留：markDownloaded 幂等（local_size 对齐磁盘真值）、
+      // setQueuedAt 清 downloadNow 写入的排队标记、updateFingerprint 刷新 last_checked_at
       this.repo.markDownloaded(job.downloadableId, result.path, result.size)
       this.repo.setQueuedAt(job.downloadableId, null)
       if (result.etag) {
@@ -369,27 +386,32 @@ export class DownloadManager {
           job.downloadableId
         ])
       }
+      // 跳过也必须补终态（开头已插 running），否则留下悬挂的 running 行
       this.repo.addDownloadRecord({
         downloadableId: job.downloadableId,
         itemId: job.itemId,
         source: job.source,
-        status: 'done',
-        bytesTotal: result.size,
-        bytesDone: result.size,
+        status: result.skipped ? 'skipped' : 'done',
+        bytesTotal: result.skipped ? null : result.size,
+        bytesDone: result.skipped ? null : result.size,
         toPath: result.path,
         etag: result.etag,
         size: result.size
       })
 
-      this.onDone?.({
-        downloadableId: job.downloadableId,
-        itemId: job.itemId,
-        filename: result.filename,
-        path: result.path,
-        source: job.source,
-        archivedPath
-      })
-      log.info(`done: ${label} (${result.size} bytes) source=${job.source}`)
+      if (result.skipped) {
+        log.info(`skipped: ${label} (up-to-date，指纹一致未重新下载) source=${job.source}`)
+      } else {
+        this.onDone?.({
+          downloadableId: job.downloadableId,
+          itemId: job.itemId,
+          filename: result.filename,
+          path: result.path,
+          source: job.source,
+          archivedPath
+        })
+        log.info(`done: ${label} (${result.size} bytes) source=${job.source}`)
+      }
     } catch (e) {
       if (this.disposed) return // 进程退出竞态：DB 已关，丢弃记录
       const auth = isAuthError(e)
@@ -427,6 +449,7 @@ export class DownloadManager {
         this.onError?.({ downloadableId: job.downloadableId, itemId: job.itemId, filename: label, error: msg, auth })
       }
     } finally {
+      decide?.('started') // 兜底：probe 前抛错/取消时不让 downloadNow 的调用方悬挂（保持原“已开始”语义）
       this.active.delete(job.downloadableId)
       this.onQueueChanged?.()
       this.pump()
@@ -436,8 +459,9 @@ export class DownloadManager {
   private async downloadOne(
     job: Job,
     signal: AbortSignal,
-    label: string
-  ): Promise<{ path: string; size: number; filename: string; etag: string | null; lastModified: string | null; archivedPath: string | null }> {
+    label: string,
+    decide?: (r: 'started' | 'skipped') => void
+  ): Promise<{ path: string; size: number; filename: string; etag: string | null; lastModified: string | null; archivedPath: string | null; skipped: boolean }> {
     const d = this.repo.getDownloadable(job.downloadableId)
     if (!d) throw new BoothError('链接不存在', 'invalid')
 
@@ -467,10 +491,13 @@ export class DownloadManager {
     // 注意：updateCheck 检测到更新后会立即把新指纹写入 DB，
     // 因此 status=update_available 时本地文件仍是旧版，绝不能跳过。
     // manual = 用户明确点击"重新下载"，即使指纹一致也强制拉取
+    // deeplink = 网页深链自动接收：指纹一致时跳过（不重下不归档），给「已是最新」提示
     const localIsFresh = d.status === 'downloaded' && job.source !== 'manual'
     if (localIsFresh && existsSync(finalPath) && fp.etag && d.lastEtag === fp.etag && d.lastSize === fp.size) {
-      return { path: finalPath, size: statSync(finalPath).size, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath: null }
+      decide?.('skipped')
+      return { path: finalPath, size: statSync(finalPath).size, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath: null, skipped: true }
     }
+    decide?.('started') // 探测完成、确认要下载（后台继续，不等下载结束）
 
     // Range 断点续传（.part 存在且 < 总大小）
     let startByte = 0
@@ -482,7 +509,7 @@ export class DownloadManager {
         // .part 已完整，直接收尾（覆盖前归档旧文件）
         const archivedPath = this.archiveExisting(job, finalPath, filename, d)
         renameSync(partPath, finalPath)
-        return { path: finalPath, size: statSync(finalPath).size, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath }
+        return { path: finalPath, size: statSync(finalPath).size, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath, skipped: false }
       } else {
         unlinkSync(partPath)
       }
@@ -619,7 +646,7 @@ export class DownloadManager {
     const archivedPath = this.archiveExisting(job, finalPath, filename, d)
     renameSync(partPath, finalPath)
     this.onProgress?.({ downloadableId: job.downloadableId, itemId: job.itemId, filename, bytesDone: actual, bytesTotal: actual })
-    return { path: finalPath, size: actual, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath }
+    return { path: finalPath, size: actual, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath, skipped: false }
   }
 
   /**

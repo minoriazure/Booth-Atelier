@@ -371,7 +371,7 @@ export class LibraryRepo {
   }): number {
     this.db.run(
       `INSERT INTO download_records (downloadable_id, item_id, source, status, bytes_total, bytes_done, error, to_path, etag_at_download, size_at_download, finished_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('done','failed','cancelled') THEN datetime('now') ELSE NULL END)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('done','failed','cancelled','skipped') THEN datetime('now') ELSE NULL END)`,
       [r.downloadableId, r.itemId, r.source, r.status, r.bytesTotal ?? null, r.bytesDone ?? null, r.error ?? null, r.toPath ?? null, r.etag ?? null, r.size ?? null, r.status]
     )
     const row = this.db.get<{ id: number }>('SELECT last_insert_rowid() AS id')

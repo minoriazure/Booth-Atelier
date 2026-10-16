@@ -145,7 +145,7 @@ npx tsx scripts/m3-verify.ts         # 全链路回归（同步→检查→下�
 
 ### 深链接
 
-接管 `booth-library-manager://` 协议。在 BOOTH 网页点「用 BOOTH Library Manager 下载」后，本程序自动拉起并把窗口前置，解析链接后直接进入下载，不经过排队。支持网页按钮和 `/deeplink` 端点两种 URL 形态，细节见下方技术要点。
+接管 `booth-library-manager://` 协议。在 BOOTH 网页点「用 BOOTH Library Manager 下载」后，本程序自动拉起并把窗口前置，解析链接后直接进入下载，不经过排队。若该文件此前已下载且内容未变（指纹一致），深链会跳过重复下载并提示「已是最新」；作者更新了文件则正常下载，旧版本照常归档进历史。支持网页按钮和 `/deeplink` 端点两种 URL 形态，细节见下方技术要点。
 
 ### 代理
 
@@ -176,7 +176,7 @@ npx tsx scripts/m3-verify.ts         # 全链路回归（同步→检查→下�
 - **商品详情页**必须带语言路径（`/zh-cn/items/{id}`），裸路径 404。
 - **限速**：所有 booth.pm 请求共享令牌桶（默认 250ms 间隔 + 抖动）。
 - **网络层**：统一走 Electron `net` 栈（自动遵循代理三档设置）；`redirect: 'manual'` 必须用 `net.request` 实现（`net.fetch` 的 manual 收到 302 会直接 reject）；**跨源且带路径的 Referer 会被 Chromium 拦截**（同源发完整值、跨源只发 origin）。
-- **深链两种形态**：`booth-library-manager://import?item_id=&dlurls[]=&filenames[]=`（网页按钮，多文件按索引配对）与 `item-import?dlurl=`（`/deeplink` 端点 302）；接收端先抢焦点让浏览器失焦（网页有 blur 超时检测），解析延后。
+- **深链两种形态**：`booth-library-manager://import?item_id=&dlurls[]=&filenames[]=`（网页按钮，多文件按索引配对）与 `item-import?dlurl=`（`/deeplink` 端点 302）；接收端先抢焦点让浏览器失焦（网页有 blur 超时检测），解析延后。深链下载前即时探测指纹，本地已下载且指纹一致时跳过并提示「已是最新」（来源记为 `deeplink`；更新页的手动「立即下载/重新下载」仍强制重下）。
 - **便携版打包**：`electron-builder --dir` + 自研 NSIS 启动器 stub（`scripts/build-portable.mjs`）。首次运行把内嵌 app.7z 解压到 exe 同级 `app-cache\<版本-载荷哈希>\`（旧版本缓存自动清理），之后每次直接启动缓存中的主程序，零解压；`PORTABLE_EXECUTABLE_DIR` 由 stub 指向 exe 所在目录，数据布局不变；`/purge` 清除程序缓存。
 
 ## 许可与免责声明

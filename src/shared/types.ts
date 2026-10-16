@@ -52,8 +52,8 @@ export interface ItemDetail {
   filenames: string[]
 }
 
-export type DownloadSource = 'initial' | 'bulk' | 'manual' | 'update'
-export type DownloadStatus = 'running' | 'done' | 'failed' | 'cancelled'
+export type DownloadSource = 'initial' | 'bulk' | 'manual' | 'update' | 'deeplink'
+export type DownloadStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'skipped'
 export type ItemStatus = 'active' | 'missing'
 export type DownloadableStatus = 'remote' | 'downloaded' | 'update_available' | 'missing'
 

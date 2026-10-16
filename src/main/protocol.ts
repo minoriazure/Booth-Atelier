@@ -196,23 +196,30 @@ async function parseAndStart(
   try {
     let started = 0
     let alreadyActive = 0
-    let skipped = 0
-    for (const f of parsed.files) {
-      if (!f.downloadableId) {
-        skipped++
-        continue
-      }
-      // 未同步过的商品/链接：建占位行，之后同步会补全元数据
-      repo.ensureAdhoc({
-        itemId: f.itemId || parsed.itemId,
-        downloadableId: f.downloadableId,
-        filename: f.filename,
-        variationId: parsed.variationId
+    let upToDate = 0
+    let noId = 0
+    let missing = 0
+    // 并行发起（downloadNow 在 probe 决策点返回，多文件不逐个串行等待）
+    const outcomes = await Promise.all(
+      parsed.files.map(async (f) => {
+        if (!f.downloadableId) return 'noid' as const
+        // 未同步过的商品/链接：建占位行，之后同步会补全元数据
+        repo.ensureAdhoc({
+          itemId: f.itemId || parsed.itemId,
+          downloadableId: f.downloadableId,
+          filename: f.filename,
+          variationId: parsed.variationId
+        })
+        // 'deeplink'：与本地已下载文件指纹一致时跳过（不重下不归档），'manual' 的强制重下仅留给 UI
+        return downloads.downloadNow(f.downloadableId, 'deeplink')
       })
-      const r = downloads.downloadNow(f.downloadableId, 'manual')
-      if (r === 'started') started++
+    )
+    for (const r of outcomes) {
+      if (r === 'noid') noId++
+      else if (r === 'started') started++
       else if (r === 'active') alreadyActive++
-      else skipped++
+      else if (r === 'skipped') upToDate++
+      else missing++ // 'missing'
     }
     const label = parsed.files[0]?.filename || `#${parsed.files[0]?.downloadableId ?? '?'}`
     if (started > 0) {
@@ -225,13 +232,21 @@ async function parseAndStart(
       })
     } else if (alreadyActive > 0) {
       emit('event:toast', { level: 'info', message: '文件已在下载中' })
+    } else if (upToDate > 0) {
+      emit('event:toast', {
+        level: 'info',
+        message:
+          upToDate === 1
+            ? `已是最新：${label}（未重复下载）`
+            : `已是最新：${upToDate} 个文件（商品 #${parsed.itemId}）`
+      })
     } else {
       emit('event:toast', { level: 'error', message: '无法解析该下载链接（缺少 downloadable id）' })
     }
     if (started > 0 || alreadyActive > 0) {
       emit('event:libraryUpdated', { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 })
     }
-    log.info(`protocol import done: started=${started} active=${alreadyActive} skipped=${skipped}`)
+    log.info(`protocol import done: started=${started} active=${alreadyActive} upToDate=${upToDate} missing=${missing} skipped=${noId}`)
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     log.error('protocol import failed:', msg)
