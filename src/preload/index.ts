@@ -54,8 +54,8 @@ export interface BoothAPI {
     /** @deprecated 语义同 startAll */
     enqueueAll(source: DownloadSource): Promise<DownloadStats>
     cancel(downloadableId: number): Promise<boolean>
-    /** 立即下载：无视并发/队列直接进入下载中。返回 started | active | missing */
-    downloadNow(downloadableId: number): Promise<'started' | 'active' | 'missing'>
+    /** 立即下载：无视并发/队列直接进入下载中。probe 后返回（约 0.3~2s）；skipped=本地已是最新未下载 */
+    downloadNow(downloadableId: number): Promise<'started' | 'active' | 'skipped' | 'missing'>
     stats(): Promise<DownloadStats>
     /** 全文件列表（DB 状态 + 队列/活动运行时合并） */
     list(): Promise<FileListRow[]>

@@ -330,6 +330,7 @@ export default function UpdatesPage({
     const res = await api.downloads.downloadNow(r.downloadableId)
     if (res === 'started') toast('info', `立即下载：${r.filename}`)
     else if (res === 'active') toast('info', '该文件已在下载中')
+    else if (res === 'skipped') toast('info', `已是最新：${r.filename}`) // manual 实际不可达，保类型完整
     else toast('error', '无法开始下载（链接不存在）')
     await load()
   }
