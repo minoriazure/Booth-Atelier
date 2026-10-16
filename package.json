@@ -1,6 +1,6 @@
 {
   "name": "booth-library-manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Booth Atelier - 自建 BOOTH 素材库管理器（官方 Booth Library Manager 替代品）",
   "main": "out/main/index.js",
   "author": "user",

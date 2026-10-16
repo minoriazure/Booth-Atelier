@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 
+/**
+ * Cookie 失效提示（无重试按钮——cookies 文件补放/覆盖后会触发自动重查登录状态，
+ * 恢复有效时本弹窗自动关闭；这里只需告诉用户把文件放哪）。
+ */
 export default function AuthExpiredDialog({
   message,
-  onClose,
-  onRetry
+  onClose
 }: {
   message: string | null
   onClose: () => void
-  onRetry: () => void
 }) {
   const [path, setPath] = useState('')
   useEffect(() => {
@@ -25,11 +27,10 @@ export default function AuthExpiredDialog({
           <br />
           <span className="code">{path}</span>
         </p>
-        <p>保存后文件会自动热加载，无需重启本程序。</p>
+        <p>把文件放回该路径即可，程序会自动识别并恢复登录状态，无需任何操作。</p>
         <div className="buttons">
-          <button onClick={onClose}>关闭</button>
-          <button className="primary" onClick={onRetry}>
-            重试
+          <button className="primary" onClick={onClose}>
+            确定
           </button>
         </div>
       </div>

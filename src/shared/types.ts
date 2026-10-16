@@ -128,9 +128,23 @@ export interface CheckSummary {
   failed: number
 }
 
+/** 应用内深链宿主询问弹窗的载荷（主进程 checkDeepLinkHost 产出，renderer 弹窗消费） */
+export interface DeepLinkHostPrompt {
+  /** 当前 HKCU 注册指向的可执行文件（null = 未注册） */
+  registeredPath: string | null
+  /** 本副本的启动器路径 */
+  selfPath: string
+}
+
 export interface Settings {
   downloadRoot: string
+  /**
+   * Cookie 文件覆盖路径（'' = 未指定，走默认查找链：exe 同级 → cwd → exe 目录 → appPath → userData）。
+   * 指定后每次启动以该路径为准认证；路径必须真实存在才能保存。
+   */
   cookiesPath: string
+  /** 启动时检查 booth-library-manager:// 深链注册是否指向本程序，指向其它副本时询问是否注册 */
+  autoRegisterDeepLink: boolean
   /** 启动时自动同步商品库（元数据/简介/宣传图） */
   autoSyncLibraryOnStartup: boolean
   /** 启动时自动检查文件更新 */

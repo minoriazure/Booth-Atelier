@@ -4,7 +4,7 @@
 
 **BOOTH 素材库管理器 —— 官方 `BOOTH Library Manager` 的替代品**
 
-![Project version: 1.0.0](https://img.shields.io/badge/version-1.0.0-blue)
+![Project version: 1.1.0](https://img.shields.io/badge/version-1.1.0-blue)
 ![Supported platform: Windows 10 and later](https://img.shields.io/badge/platform-Windows%2010%20%2B-0078D4?logo=windows&logoColor=white)
 ![Electron version 33](https://img.shields.io/badge/Electron-33-9FEAF9?logo=electron&logoColor=black)
 ![Node.js version 24 or later](https://img.shields.io/badge/Node.js-24%2B-339933?logo=node.js&logoColor=white)
@@ -33,7 +33,7 @@
 
 ## 主要特性
 
-- Cookie 登录，cookies 文件更新后热加载，不用重启
+- Cookie 登录，cookies 文件更新/补放后自动热加载并自动重查登录状态，不用重启；登录态只随 Cookie 文件走（网络请求在进程内存 session 中进行，关闭程序不在系统留登录 cookie，拷贝程序到别处不会带走登录态）
 - 同步购买库与赠送库的全部元数据，本地浏览、搜索，不自动下载素材文件
 - 更新检查精确到单个下载链接（官方只能到商品级），可自动检查、可自动下载
 - 下载直接拿到卖家上传的原始文件，多任务队列、断点续传
@@ -63,10 +63,15 @@
 1. 浏览器安装导出 cookies 的插件（如 *[Get cookies.txt LOCALLY](https://github.com/kairi003/Get-cookies.txt-LOCALLY)*）
 2. 登录 <https://accounts.booth.pm/library>
 3. 导出 Netscape 格式 cookies，保存为程序目录下的 `booth_cookies.txt`
-4. Cookie 过期时程序会弹窗提示；重新导出覆盖文件即可自动生效，点「重试」继续
+4. Cookie 过期时程序会弹窗提示；重新导出并覆盖文件即可自动生效——程序检测到文件变化会**自动重新检查登录状态**并恢复，无需任何点击。即使文件被删除了，把 cookies 文件放回弹窗提示的路径即可，同样会被自动识别并恢复登录
 
 > [!WARNING]
 > `booth_cookies.txt` 等同于你的登录凭证，**已被加入 `.gitignore`，切勿提交到仓库或分享给他人**。
+
+> [!IMPORTANT]
+> **登录态只存在于 Cookie 文件本身。** 所有 BOOTH 网络请求走进程内内存 session，关闭程序后系统层面不残留任何登录 cookie。因此：把 exe 拷到新目录、删除 Cookie 文件，登录态即刻消失——不会出现「程序放哪都能登录」。
+>
+> 「设置 → Cookie 文件」行的输入框显示当前生效路径（未指定时为默认查找结果，exe 同级优先）：**选择文件… / 恢复默认** 立即生效并自动检测登录；手动改路径后点「检测登录状态」（或回车）应用并检测。也可直接在输入框指定任意位置的 Cookie 文件。
 
 ## 从源码构建
 
@@ -147,6 +152,8 @@ npx tsx scripts/m3-verify.ts         # 全链路回归（同步→检查→下�
 
 接管 `booth-library-manager://` 协议。在 BOOTH 网页点「用 BOOTH Library Manager 下载」后，本程序自动拉起并把窗口前置，解析链接后直接进入下载，不经过排队。若该文件此前已下载且内容未变（指纹一致），深链会跳过重复下载并提示「已是最新」；作者更新了文件则正常下载，旧版本照常归档进历史。支持网页按钮和 `/deeplink` 端点两种 URL 形态，细节见下方技术要点。
 
+本程序副本可以有多份同时存在。启动时会检查网页下载按钮当前指向哪个程序（「设置 → 启动时检查深链注册」，默认开）：指向别的副本时会在应用内询问是否改为本程序，选「不注册」自动关闭该检查（可随时在设置重新开启）。深链的**接收**不受此开关影响。
+
 ### 代理
 
 设置页三档：系统代理、自定义、直连。系统代理跟随 Windows 系统设置，行为和 Chrome 一致，改了即时生效；自定义支持 `http://`、`socks5://` 和裸地址三种写法。切换不需要重启程序，yt-dlp 视频下载也走当前生效的代理。
@@ -175,7 +182,7 @@ npx tsx scripts/m3-verify.ts         # 全链路回归（同步→检查→下�
 - **文件指纹**：对签名直链发 `Range: bytes=0-0` GET，从 `Content-Range` 取总大小 + `ETag`（HEAD 会 301 不可用；Range 响应的 `Content-Length` 是 1 也不可用）。
 - **商品详情页**必须带语言路径（`/zh-cn/items/{id}`），裸路径 404。
 - **限速**：所有 booth.pm 请求共享令牌桶（默认 250ms 间隔 + 抖动）。
-- **网络层**：统一走 Electron `net` 栈（自动遵循代理三档设置）；`redirect: 'manual'` 必须用 `net.request` 实现（`net.fetch` 的 manual 收到 302 会直接 reject）；**跨源且带路径的 Referer 会被 Chromium 拦截**（同源发完整值、跨源只发 origin）。
+- **网络层**：统一走 Electron `net` 栈 + 专用**进程内存 session**（`booth-runtime` 分区：不落盘、无 HTTP 缓存、请求不带 session cookie——登录 cookie 唯一来源是 Cookie 文件注入的显式头，这是「换目录不带走登录态」的实现基础，勿改回 defaultSession）；自动遵循代理三档设置；`redirect: 'manual'` 必须用 `net.request` 实现（`net.fetch` 的 manual 收到 302 会直接 reject）；**跨源且带路径的 Referer 会被 Chromium 拦截**（同源发完整值、跨源只发 origin）。
 - **深链两种形态**：`booth-library-manager://import?item_id=&dlurls[]=&filenames[]=`（网页按钮，多文件按索引配对）与 `item-import?dlurl=`（`/deeplink` 端点 302）；接收端先抢焦点让浏览器失焦（网页有 blur 超时检测），解析延后。深链下载前即时探测指纹，本地已下载且指纹一致时跳过并提示「已是最新」（来源记为 `deeplink`；更新页的手动「立即下载/重新下载」仍强制重下）。
 - **便携版打包**：`electron-builder --dir` + 自研 NSIS 启动器 stub（`scripts/build-portable.mjs`）。首次运行把内嵌 app.7z 解压到 exe 同级 `app-cache\<版本-载荷哈希>\`（旧版本缓存自动清理），之后每次直接启动缓存中的主程序，零解压；`PORTABLE_EXECUTABLE_DIR` 由 stub 指向 exe 所在目录，数据布局不变；`/purge` 清除程序缓存。
 

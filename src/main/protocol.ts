@@ -1,6 +1,8 @@
 import { app, BrowserWindow } from 'electron'
 import { readdirSync } from 'fs'
-import { join } from 'path'
+import { execFileSync } from 'child_process'
+import { join, resolve } from 'path'
+import type { DeepLinkHostPrompt } from '../shared/types'
 import { createLogger } from './util/log'
 
 const log = createLogger('protocol')
@@ -106,17 +108,12 @@ export function parseItemImportUrl(raw: string): ProtocolImport | null {
 }
 
 /**
- * 把 booth-library-manager:// 注册为本程序处理（覆盖官方注册）。
- * - portable：注册缓存型 stub（PORTABLE_EXECUTABLE_DIR 下的 BoothAtelier-*-portable.exe），
+ * 解析「注册深链时会写入的启动器路径」：
+ * - portable：缓存型 stub（PORTABLE_EXECUTABLE_DIR 下的 BoothAtelier-*-portable.exe），
  *   固定路径永不消失，stub 负责从 exe 同级 app-cache\ 启动主程序并转发参数
- * - 仅打包版注册；dev 下注册 electron.exe 会劫持系统且开发时行为混乱
- * - HKCU\Software\Classes 优先级高于 HKLM，可覆盖官方的机器级注册
+ * - 非 portable：execPath
  */
-export function registerProtocol(): void {
-  if (!app.isPackaged) {
-    log.info('dev mode: skip protocol registration')
-    return
-  }
+function resolveProtocolLauncher(): string {
   let launcher = process.execPath
   const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
   if (portableDir) {
@@ -133,12 +130,95 @@ export function registerProtocol(): void {
       log.warn('portable launcher detect failed:', e)
     }
   }
+  return launcher
+}
+
+/**
+ * 把 booth-library-manager:// 注册为本程序处理（覆盖官方注册）。
+ * 仅打包版注册；dev 下注册 electron.exe 会劫持系统且开发时行为混乱。
+ * HKCU\Software\Classes 优先级高于 HKLM，可覆盖官方的机器级注册。
+ */
+export function registerProtocol(): void {
+  if (!app.isPackaged) {
+    log.info('dev mode: skip protocol registration')
+    return
+  }
+  const launcher = resolveProtocolLauncher()
   try {
     const ok = app.setAsDefaultProtocolClient(BOOTH_PROTOCOL, launcher, [])
     log.info(`register ${BOOTH_PROTOCOL}:// → ${launcher} (ok=${ok})`)
   } catch (e) {
     log.error('protocol register failed:', e)
   }
+}
+
+/** 读取 HKCU 里 booth-library-manager:// 的 open command（未注册/读取失败返回 null） */
+export function readRegisteredProtocolCommand(): string | null {
+  try {
+    // 注意1：不带 /v Default——中文 Windows 上默认值名是「(默认)」，/v Default 会报
+    // “系统找不到指定的注册表项或值”；不带 /v 列出全部值，open\command 键通常只有默认值
+    // 注意2：reg 按控制台代码页（中文系统 = GBK）输出，路径含中文时必须按 GBK 解码
+    const buf = execFileSync(
+      'reg',
+      ['query', `HKCU\\Software\\Classes\\${BOOTH_PROTOCOL}\\shell\\open\\command`],
+      { encoding: 'buffer', windowsHide: true, timeout: 3000 }
+    )
+    let out: string
+    try {
+      out = new TextDecoder('gbk').decode(buf)
+    } catch {
+      out = buf.toString('utf-8')
+    }
+    // 输出形如：    (默认)    REG_SZ    "C:\path\app.exe" "%1"
+    const m = /REG_(?:EXPAND_)?SZ\s+(.+)/.exec(out)
+    return m ? m[1].trim() : null
+  } catch {
+    return null // 未注册（HKCU 无此项）时 reg query 以非零退出
+  }
+}
+
+/** 从 open command 提取可执行文件路径（命令形如 `"path" "%1"` 或 `path "%1"`） */
+function extractCommandPath(cmd: string): string {
+  const t = cmd.trim()
+  const quoted = /^"([^"]+)"/.exec(t)
+  if (quoted) return quoted[1]
+  return t.split(/\s+/)[0]
+}
+
+/** 路径归一（去引号/相对段/大小写），用于「是否指向自身」比较 */
+function normalizePathForCompare(p: string): string {
+  try {
+    return resolve(p).toLowerCase()
+  } catch {
+    return p.toLowerCase()
+  }
+}
+
+/**
+ * 深链宿主自检（独立功能，与 cookies 无关）。由 renderer 挂载时经 IPC 调用，
+ * 返回需要询问的弹窗载荷；无需询问返回 null：
+ * - dev（可用 BOOTH_FORCE_HOST_PROMPT=1 强制，测试钩子）；
+ * - autoRegisterDeepLink 关 → 跳过（本副本不再抢占协议注册）；
+ * - 注册已指向本程序 → 照旧自愈重写（修正引号/参数漂移）。
+ * 指向其它副本/未注册 → 返回载荷，由应用内弹窗询问；决定经 protocol:hostDecision 回传。
+ */
+export function checkDeepLinkHost(getAutoRegister: () => boolean): DeepLinkHostPrompt | null {
+  const force = process.env.BOOTH_FORCE_HOST_PROMPT === '1'
+  if (!app.isPackaged && !force) return null
+  if (!getAutoRegister()) {
+    log.info('deep link host check: disabled (autoRegisterDeepLink=false)')
+    return null
+  }
+  const selfPath = resolveProtocolLauncher()
+  const registered = readRegisteredProtocolCommand()
+  const registeredPath = registered ? extractCommandPath(registered) : null
+  if (!force && registeredPath && normalizePathForCompare(registeredPath) === normalizePathForCompare(selfPath)) {
+    // 已指向自身：照旧自愈重写（修正引号/参数漂移）
+    registerProtocol()
+    return null
+  }
+  log.info(`deep link host check: registered=${registeredPath ?? '(未注册)'} self=${selfPath} → 应用内弹窗询问`)
+  return { registeredPath, selfPath }
 }
 
 /** 从 argv / open-url 提取协议 URL */

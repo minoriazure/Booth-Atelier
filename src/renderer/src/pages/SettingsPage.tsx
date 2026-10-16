@@ -19,27 +19,64 @@ export default function SettingsPage({
   const [saving, setSaving] = useState(false)
   const [proxyInfo, setProxyInfo] = useState<string | null>(null)
   const [customProxyInput, setCustomProxyInput] = useState(settings.customProxy)
+  /** Cookie 路径输入框草稿；初始/同步自「当前生效路径」（无覆盖时 = 默认链路径） */
+  const [cookiesPathInput, setCookiesPathInput] = useState(settings.cookiesPath)
+  /** 「未改动」基准 = 当前生效路径（jar 实际指向），用于区分「仅检测」与「应用并检测」 */
+  const [cleanPath, setCleanPath] = useState(settings.cookiesPath)
 
   const refreshProxy = (): void => {
     void api.system.proxyInfo().then(setProxyInfo).catch(() => setProxyInfo(null))
   }
+  /** 从主进程拉当前生效路径（无覆盖时 = 默认链解析结果），同步输入框与基准 */
+  const refreshCookiesDisplay = (): void => {
+    void api.auth
+      .cookiesPath()
+      .then((p) => {
+        setCleanPath(p)
+        setCookiesPathInput(p)
+      })
+      .catch(() => {})
+  }
   useEffect(() => {
     refreshProxy()
+    refreshCookiesDisplay()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const patch = async (p: Partial<Settings>): Promise<void> => {
+  const patch = async (p: Partial<Settings>): Promise<boolean> => {
     setSaving(true)
     try {
       const s = await api.settings.set(p)
       onSettings(s)
       if (p.downloadRoot !== undefined) toast('info', '下载目录已更新（已下载文件不会移动）')
       if ('proxyMode' in p || 'customProxy' in p) refreshProxy()
+      if ('cookiesPath' in p) {
+        refreshCookiesDisplay()
+        toast('info', p.cookiesPath ? 'Cookie 路径已应用' : '已恢复默认路径查找')
+      }
+      return true
     } catch (e) {
       toast('error', `保存失败：${e instanceof Error ? e.message : e}`)
+      return false
     } finally {
       setSaving(false)
     }
+  }
+
+  /**
+   * 「检测登录状态」（回车同）：
+   * - 路径与当前生效一致（或空输入且本就无覆盖）→ 仅检查；
+   * - 有改动 → 先应用（写设置，路径须存在）再检查；空输入 = 恢复默认查找。
+   */
+  const applyCookiesPathAndCheck = (): void => {
+    const v = cookiesPathInput.trim()
+    if (v === cleanPath || (v === '' && !settings.cookiesPath)) {
+      onAuthCheck()
+      return
+    }
+    void patch({ cookiesPath: v }).then((ok) => {
+      if (ok) onAuthCheck()
+    })
   }
 
   const saveCustomProxy = (): void => {
@@ -69,10 +106,39 @@ export default function SettingsPage({
         <div className="setting-row">
           <div className="label">Cookie 文件</div>
           <div className="value">
-            <span className="path-text" title={settings.cookiesPath}>
-              {settings.cookiesPath}
+            <input
+              type="text"
+              style={{ width: 340 }}
+              value={cookiesPathInput}
+              placeholder="Cookie 文件路径…"
+              title="当前生效的 Cookie 文件路径；改后点「检测登录状态」或回车应用并检测"
+              onChange={(e) => setCookiesPathInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') applyCookiesPathAndCheck()
+              }}
+            />
+            <button onClick={applyCookiesPathAndCheck}>检测登录状态</button>
+            <button
+              onClick={() =>
+                void api.dialog.chooseFile().then((p) => {
+                  if (p) void patch({ cookiesPath: p }).then((ok) => ok && onAuthCheck())
+                })
+              }
+            >
+              选择文件…
+            </button>
+            <button
+              onClick={() => void patch({ cookiesPath: '' }).then((ok) => ok && onAuthCheck())}
+              disabled={!settings.cookiesPath}
+              title="清除指定路径，回到默认查找（exe 同级优先）"
+            >
+              恢复默认
+            </button>
+            <span className="hint">
+              输入框显示当前生效的 Cookie 文件路径（未指定时为默认查找结果，exe 同级优先）。点「检测登录状态」（或回车）：
+              路径有改动会先应用再检测（须真实存在），与当前一致则仅检测。「选择文件… / 恢复默认」立即生效并自动检测。
+              文件被替换后自动热加载，无需重启。
             </span>
-            <button onClick={onAuthCheck}>检测登录状态</button>
           </div>
         </div>
         <div className="setting-row">
@@ -136,6 +202,26 @@ export default function SettingsPage({
             <span className="hint">
               Cookie 过期时用浏览器插件重新导出并覆盖上述文件即可，程序会自动热加载。目录结构：
               <code> {"{下载根目录}/{商品编号}/files/current|history/{日期}}"} </code>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>深链协议</h3>
+        <div className="setting-row">
+          <div className="label">启动时检查深链注册</div>
+          <div className="value">
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={settings.autoRegisterDeepLink}
+                onChange={(e) => void patch({ autoRegisterDeepLink: e.target.checked })}
+              />
+              <span className="slider" />
+            </label>
+            <span className="hint">
+              开启时，启动检查网页「在 Library Manager 中下载」按钮（booth-library-manager:// 深链）是否指向本程序；指向其它副本时询问是否注册。选择「不注册」会自动关闭本开关。
             </span>
           </div>
         </div>

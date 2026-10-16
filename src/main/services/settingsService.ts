@@ -4,7 +4,7 @@ import type { Settings } from '../../shared/types'
 import type { LibraryRepo } from '../db/repos'
 import type { Paths } from '../util/paths'
 
-const DEFAULTS: Omit<Settings, 'downloadRoot' | 'cookiesPath'> = {
+const DEFAULTS: Omit<Settings, 'downloadRoot'> = {
   autoSyncLibraryOnStartup: true,
   autoCheckFilesOnStartup: true,
   themeMode: 'dark',
@@ -15,6 +15,10 @@ const DEFAULTS: Omit<Settings, 'downloadRoot' | 'cookiesPath'> = {
   minRequestIntervalMs: 250,
   proxyMode: 'system',
   customProxy: '',
+  // cookiesPath = 纯覆盖项：'' 表示未指定，走默认查找链（exe 同级优先）。
+  // 旧 DB 可能持久化过「首启默认路径」，消费侧仅当路径真实存在时才当作覆盖。
+  cookiesPath: '',
+  autoRegisterDeepLink: true,
   lastLibrarySyncAt: null,
   lastGlobalCheckAt: null
 }
@@ -22,8 +26,7 @@ const DEFAULTS: Omit<Settings, 'downloadRoot' | 'cookiesPath'> = {
 export class SettingsService {
   constructor(
     private repo: LibraryRepo,
-    private paths: Paths,
-    private defaultCookiesPath: string
+    private paths: Paths
   ) {}
 
   get(): Settings {
@@ -36,7 +39,7 @@ export class SettingsService {
       downloadRoot = join(this.paths.rootPath || resolve('.'), '')
       this.repo.setSetting('downloadRoot', downloadRoot)
     }
-    const cookiesPath = this.repo.getSetting<string>('cookiesPath', this.defaultCookiesPath)
+    const cookiesPath = this.repo.getSetting<string>('cookiesPath', '')
     return { ...DEFAULTS, ...stored, downloadRoot, cookiesPath } as Settings
   }
 

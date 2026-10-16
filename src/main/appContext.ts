@@ -43,13 +43,15 @@ export interface AppContext {
   checker: UpdateCheckService
   downloads: DownloadManager
   startup: StartupService
+  /** 默认查找链解析出的 cookies 路径（settings 未指定覆盖时生效；清空覆盖后回到它） */
+  defaultCookiesPath: string
   dispose(): void
 }
 
 export interface AppContextOptions {
   /** 数据目录（DB、图片缓存落这里）；portable 模式 = exe 同级 data */
   dataDir: string
-  /** cookies 文件路径 */
+  /** cookies 默认查找链解析出的路径（settings.cookiesPath 覆盖项为空时生效） */
   cookiesPath: string
   /** 下载根目录（空则用 dataDir/downloads 作为默认） */
   downloadRoot?: string
@@ -60,7 +62,37 @@ export interface AppContextOptions {
 export async function createAppContext(opts: AppContextOptions): Promise<AppContext> {
   mkdirSync(opts.dataDir, { recursive: true })
 
-  const jar = new BoothCookieJar(opts.cookiesPath)
+  // DB 先行：settings.cookiesPath 覆盖项决定 jar 的实际路径，必须先能读设置
+  const db = new Db(join(opts.dataDir, 'library.db'), resolve(__dirname, '../../node_modules/sql.js/dist/sql-wasm.wasm'))
+  await db.open()
+  const repo = new LibraryRepo(db)
+
+  // 设置优先：用户已保存的 downloadRoot 优先于默认值（portable/首次启动才用 opts 默认）
+  // 双根：数据根 = dataDir（图片/视频/快照/描述），下载根 = 素材文件（只放 booth 下载物）
+  const bootPaths = new Paths(opts.dataDir, opts.downloadRoot || join(opts.dataDir, 'downloads'))
+  const settings = new SettingsService(repo, bootPaths)
+  const s0 = settings.get()
+  if (!settings.hasDownloadRoot() && opts.downloadRoot) {
+    settings.set({ downloadRoot: opts.downloadRoot })
+  }
+  const paths = new Paths(opts.dataDir, settings.get().downloadRoot)
+  bootPaths.setRoot(paths.rootPath)
+
+  // cookies 路径：设置覆盖项（settings.cookiesPath）非空且文件真实存在 → 以它为准；
+  // 否则回默认查找链（opts.cookiesPath，portable = exe 同级优先）。
+  // 覆盖路径消失（被删/被移走）时自动回退并告警，绝不静默用错文件。
+  const override = settings.get().cookiesPath.trim()
+  let effectiveCookiesPath = opts.cookiesPath
+  if (override) {
+    if (existsSync(override)) {
+      effectiveCookiesPath = override
+      log.info(`cookies path override in effect: ${override}`)
+    } else {
+      log.warn(`cookies path override missing on disk, fallback to default: ${override}`)
+    }
+  }
+
+  const jar = new BoothCookieJar(effectiveCookiesPath)
   jar.load()
 
   const limiter = new RateLimiter(250, 100)
@@ -70,21 +102,6 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   const crawler = new LibraryCrawler(http)
   const itemPage = new ItemPageParser(http)
   const auth = new AuthChecker(http)
-
-  const db = new Db(join(opts.dataDir, 'library.db'), resolve(__dirname, '../../node_modules/sql.js/dist/sql-wasm.wasm'))
-  await db.open()
-  const repo = new LibraryRepo(db)
-
-  // 设置优先：用户已保存的 downloadRoot 优先于默认值（portable/首次启动才用 opts 默认）
-  // 双根：数据根 = dataDir（图片/视频/快照/描述），下载根 = 素材文件（只放 booth 下载物）
-  const bootPaths = new Paths(opts.dataDir, opts.downloadRoot || join(opts.dataDir, 'downloads'))
-  const settings = new SettingsService(repo, bootPaths, opts.cookiesPath)
-  const s0 = settings.get()
-  if (!settings.hasDownloadRoot() && opts.downloadRoot) {
-    settings.set({ downloadRoot: opts.downloadRoot })
-  }
-  const paths = new Paths(opts.dataDir, settings.get().downloadRoot)
-  bootPaths.setRoot(paths.rootPath)
 
   const s = settings.get()
   limiter.setMinInterval(s.minRequestIntervalMs)
@@ -139,6 +156,7 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
     checker,
     downloads,
     startup,
+    defaultCookiesPath: opts.cookiesPath,
     dispose() {
       downloads.dispose()
       imageLocalizer.dispose()
