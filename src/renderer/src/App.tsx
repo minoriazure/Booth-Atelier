@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { CheckProgressEvent, CheckSummary, Settings } from '../../shared/types'
+import type { CheckProgressEvent, CheckSummary, DeepLinkHostPrompt, Settings } from '../../shared/types'
 import { api } from './api'
 import LibraryWallPage from './pages/LibraryWallPage'
 import ItemDetailPage from './pages/ItemDetailPage'
@@ -7,6 +7,7 @@ import UpdatesPage from './pages/UpdatesPage'
 import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
 import AuthExpiredDialog from './components/AuthExpiredDialog'
+import DeepLinkHostDialog from './components/DeepLinkHostDialog'
 
 type Tab = 'library' | 'updates' | 'history' | 'settings'
 
@@ -35,6 +36,8 @@ export default function App() {
   /** 最近一次完成的确认（底栏最下行，状态确认用） */
   const [lastCompleted, setLastCompleted] = useState<string | null>(null)
   const [imgProgress, setImgProgress] = useState<{ done: number; total: number; active: number; queued: number } | null>(null)
+  /** 深链宿主自检弹窗（指向其它副本时询问，独立于 cookies） */
+  const [hostPrompt, setHostPrompt] = useState<DeepLinkHostPrompt | null>(null)
 
   const pushToast = useCallback((level: Toast['level'], message: string) => {
     const id = Date.now() + Math.random()
@@ -61,11 +64,45 @@ export default function App() {
     [pushToast]
   )
 
+  /** 交互式登录检查（设置页「检测登录状态」与 cookies 变化自动重查共用）：过程与结果都有 toast */
+  const runAuthCheck = useCallback(async () => {
+    pushToast('info', '正在检查登录状态…')
+    const r = await api.auth.check()
+    applyAuthResult(r, { silent: true })
+    if (r.ok) pushToast('info', '✓ 登录有效')
+    else if (r.kind === 'rate_limited') pushToast('warn', 'BOOTH 访问受限（限流），稍后再试')
+    else pushToast('error', r.error ?? 'Cookie 无效')
+  }, [pushToast, applyAuthResult])
+
   // 初始加载
   useEffect(() => {
     void api.settings.get().then(setSettings)
     void api.auth.check().then((r) => applyAuthResult(r))
+    // 深链宿主自检（本地操作，无需等待 settings）：需要询问时弹应用内弹窗
+    void api.protocol
+      .hostStatus()
+      .then((r) => {
+        if (r) setHostPrompt(r)
+      })
+      .catch(() => {})
   }, [applyAuthResult])
+
+  /** 深链弹窗决定：register=注册为本程序；decline=不注册并自动关检查开关 */
+  const decideHost = useCallback(
+    async (decision: 'register' | 'decline') => {
+      setHostPrompt(null)
+      try {
+        const r = await api.protocol.hostDecision(decision)
+        if (r.registered) pushToast('info', '已将网页下载按钮（深链）注册为本程序')
+        else pushToast('info', '已关闭深链注册检查（可在设置中重新开启）')
+        // 同步 autoRegisterDeepLink（decline 时主进程已写库）
+        void api.settings.get().then(setSettings)
+      } catch (e) {
+        pushToast('error', `操作失败：${e instanceof Error ? e.message : e}`)
+      }
+    },
+    [pushToast]
+  )
 
   // 主题应用：data-theme + accent 变量
   useEffect(() => {
@@ -102,6 +139,10 @@ export default function App() {
         setAuthOk(false)
         setAuthMessage(msg)
       }),
+      // cookies 文件内容真实变化（补放/覆盖/删除）→ 自动重查登录状态，刷新右上角状态/失效弹窗
+      api.events.onCookiesReloaded(() => {
+        void runAuthCheck()
+      }),
       api.events.onToast((t) => pushToast(t.level, t.message)),
       api.events.onImageProgress((e) => {
         setImgProgress((prev) => {
@@ -114,7 +155,7 @@ export default function App() {
       })
     ]
     return () => unsubs.forEach((u) => u())
-  }, [pushToast])
+  }, [pushToast, runAuthCheck])
 
   const openDetail = useCallback((id: number) => {
     setDetailId(id)
@@ -236,13 +277,7 @@ export default function App() {
             settings={settings}
             onSettings={setSettings}
             toast={pushToast}
-            onAuthCheck={async () => {
-              const r = await api.auth.check()
-              applyAuthResult(r, { silent: true })
-              if (r.ok) pushToast('info', 'Cookie 有效')
-              else if (r.kind === 'rate_limited') pushToast('warn', 'BOOTH 访问受限（限流），稍后再试')
-              else pushToast('error', r.error ?? 'Cookie 无效')
-            }}
+            onAuthCheck={() => void runAuthCheck()}
           />
         )}
       </div>
@@ -294,21 +329,10 @@ export default function App() {
       </div>
 
       {authOk === false && authMessage !== null && (
-        <AuthExpiredDialog
-          message={authMessage}
-          onClose={() => setAuthMessage(null)}
-          onRetry={async () => {
-            const r = await api.auth.check()
-            applyAuthResult(r, { silent: r.ok })
-            if (r.ok) {
-              pushToast('info', 'Cookie 已恢复有效，下载队列已自动恢复')
-              setAuthMessage(null)
-            } else if (r.kind === 'rate_limited') {
-              setAuthMessage(null)
-            }
-          }}
-        />
+        <AuthExpiredDialog message={authMessage} onClose={() => setAuthMessage(null)} />
       )}
+
+      {hostPrompt && <DeepLinkHostDialog info={hostPrompt} onDecide={(d) => void decideHost(d)} />}
     </div>
   )
 }

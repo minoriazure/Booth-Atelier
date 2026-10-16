@@ -3,7 +3,7 @@ import { join, resolve, dirname, extname } from 'path'
 import { existsSync, statSync, createReadStream } from 'fs'
 import { createAppContext, type AppContext } from './appContext'
 import { registerIpc } from './ipc/handlers'
-import { registerProtocol, findProtocolArg, handleProtocolUrl, focusMainWindow, BOOTH_PROTOCOL } from './protocol'
+import { findProtocolArg, handleProtocolUrl, focusMainWindow, BOOTH_PROTOCOL } from './protocol'
 import { createLogger } from './util/log'
 
 const log = createLogger('main')
@@ -206,7 +206,6 @@ if (!gotLock) {
     // 深链冷启动优化（DEEP-LINK.md §4.2 F3）：窗口最先可见（不加载 renderer），
     // DB/队列/网络等重活全部排在它后面 —— 浏览器只要窗口失焦就判成功。
     createWindow()
-    registerProtocol()
     log.info(`window created (uptime ${Math.round(process.uptime() * 1000)}ms)`)
 
     // 深链冷启动：argv 带 URL 时【立刻】抢前台（不等 DB/IPC/解析），解析投递延后
@@ -242,8 +241,16 @@ if (!gotLock) {
     }
 
     ctx.jar.watch(() => {
-      log.info('cookies hot-reloaded')
-      mainWindow?.webContents.send('event:toast', { level: 'info', message: 'Cookie 文件已更新，可重试操作' })
+      // jar 内容真实变化（补放/覆盖/删除）→ 通知 renderer 自动重查登录状态并刷新右上角状态
+      log.info('cookies hot-reloaded → notify renderer to re-check auth')
+      const w = mainWindow
+      if (w && !w.isDestroyed() && !w.webContents.isDestroyed()) {
+        try {
+          w.webContents.send('event:cookiesReloaded')
+        } catch {
+          /* closing */
+        }
+      }
     })
 
     registerIpc(ctx, () => mainWindow)

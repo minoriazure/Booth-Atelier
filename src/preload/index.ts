@@ -13,7 +13,8 @@ import type {
   FileHistoryEntry,
   SnapshotEntry,
   ItemVideo,
-  ImageProgress
+  ImageProgress,
+  DeepLinkHostPrompt
 } from '../shared/types'
 
 export interface VideoProgressEvent {
@@ -90,6 +91,13 @@ export interface BoothAPI {
   }
   dialog: {
     chooseDir(): Promise<string | null>
+    chooseFile(): Promise<string | null>
+  }
+  protocol: {
+    /** 深链宿主自检：需要询问时返回弹窗载荷，否则 null */
+    hostStatus(): Promise<DeepLinkHostPrompt | null>
+    /** 用户对应用内弹窗的决定：register=注册为本程序；decline=不注册并关闭检查开关 */
+    hostDecision(decision: 'register' | 'decline'): Promise<{ registered: boolean; autoRegister: boolean }>
   }
   system: {
     /** 系统代理状态（如 "HTTP 127.0.0.1:7890" / "DIRECT"），下载会自动遵循 */
@@ -103,6 +111,8 @@ export interface BoothAPI {
     onDownloadError(cb: (e: { downloadableId: number; itemId: number; filename: string; error: string; auth: boolean }) => void): () => void
     onQueueChanged(cb: (stats: DownloadStats) => void): () => void
     onAuthExpired(cb: (message: string) => void): () => void
+    /** cookies 文件内容真实变化（补放/覆盖/删除）——renderer 收到后自动重查登录状态 */
+    onCookiesReloaded(cb: () => void): () => void
     onToast(cb: (e: { level: 'info' | 'warn' | 'error'; message: string }) => void): () => void
     onImageReady(cb: (e: { itemId: number; url: string }) => void): () => void
     onImageProgress(cb: (e: ImageProgress) => void): () => void
@@ -172,7 +182,12 @@ const api: BoothAPI = {
     reveal: (path) => ipcRenderer.invoke('videos:reveal', path)
   },
   dialog: {
-    chooseDir: () => ipcRenderer.invoke('dialog:chooseDir')
+    chooseDir: () => ipcRenderer.invoke('dialog:chooseDir'),
+    chooseFile: () => ipcRenderer.invoke('dialog:chooseFile')
+  },
+  protocol: {
+    hostStatus: () => ipcRenderer.invoke('protocol:hostStatus'),
+    hostDecision: (decision) => ipcRenderer.invoke('protocol:hostDecision', decision)
   },
   system: {
     proxyInfo: () => ipcRenderer.invoke('system:proxyInfo')
@@ -185,6 +200,7 @@ const api: BoothAPI = {
     onDownloadError: (cb) => subscribe('event:downloadError', cb),
     onQueueChanged: (cb) => subscribe('event:queueChanged', cb),
     onAuthExpired: (cb) => subscribe('event:authExpired', cb),
+    onCookiesReloaded: (cb) => subscribe('event:cookiesReloaded', cb),
     onToast: (cb) => subscribe('event:toast', cb),
     onImageReady: (cb) => subscribe('event:imageReady', cb),
     onImageProgress: (cb) => subscribe('event:imageProgress', cb),

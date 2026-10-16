@@ -1,7 +1,9 @@
 import { ipcMain, shell, dialog, BrowserWindow } from 'electron'
+import { existsSync } from 'fs'
 import { z } from 'zod'
 import type { AppContext } from '../appContext'
 import { isAuthError } from '../booth/errors'
+import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
 
 const log = createLogger('ipc')
@@ -46,11 +48,25 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     if (p.proxyMode !== undefined && !['system', 'custom', 'direct'].includes(String(p.proxyMode))) {
       throw new Error(`无效的代理模式: ${String(p.proxyMode)}`)
     }
+    if (p.autoRegisterDeepLink !== undefined && typeof p.autoRegisterDeepLink !== 'boolean') {
+      throw new Error('autoRegisterDeepLink 必须是布尔值')
+    }
+    // cookiesPath = 覆盖项：非空时文件必须真实存在（启动时同样「存在才覆盖」，保持一致）
+    if (p.cookiesPath !== undefined) {
+      const v = String(p.cookiesPath ?? '').trim()
+      p.cookiesPath = v
+      if (v && !existsSync(v)) throw new Error(`Cookie 文件不存在: ${v}`)
+    }
     const next = ctx.settings.set(p as never)
     // 代理设置变更：立即热应用（无需重启），随后 UI 刷新 proxyInfo 即可看到新值
     if ('proxyMode' in p || 'customProxy' in p) {
       const { applyProxySettings } = await import('../booth/systemFetch')
       await applyProxySettings(next.proxyMode, next.customProxy)
+    }
+    // cookies 路径变更：立即热应用（空 = 清除覆盖 → 回默认查找链）
+    if ('cookiesPath' in p) {
+      ctx.jar.setPath(String(next.cookiesPath || '').trim() || ctx.defaultCookiesPath)
+      log.info(`cookies path applied: ${ctx.jar.filePathRef}`)
     }
     return next
   })
@@ -216,6 +232,29 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
       title: '选择下载根目录'
     })
     return r.canceled ? null : r.filePaths[0] ?? null
+  })
+  handle('dialog:chooseFile', async () => {
+    const r = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      title: '选择 Cookie 文件（Netscape 格式）'
+    })
+    return r.canceled ? null : r.filePaths[0] ?? null
+  })
+
+  // ── protocol（深链宿主自检：应用内弹窗，独立于 cookies）──
+  handle('protocol:hostStatus', () =>
+    checkDeepLinkHost(() => ctx.settings.get().autoRegisterDeepLink === true)
+  )
+  handle('protocol:hostDecision', (decision: unknown) => {
+    const d = z.enum(['register', 'decline']).parse(decision)
+    if (d === 'register') {
+      registerProtocol()
+      log.info('deep link host: registered after user confirm')
+      return { registered: true, autoRegister: true }
+    }
+    ctx.settings.set({ autoRegisterDeepLink: false })
+    log.info('deep link host: declined by user, autoRegisterDeepLink → false')
+    return { registered: false, autoRegister: false }
   })
 
   // ── auth ──
