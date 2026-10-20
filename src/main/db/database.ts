@@ -14,6 +14,8 @@ const log = createLogger('db')
 export class Db {
   private db!: Database
   private dirty = false
+  /** 事务嵌套深度：事务内禁止落盘（export 会关闭重开连接，使事务失效） */
+  private txDepth = 0
   private saveTimer: NodeJS.Timeout | null = null
 
   constructor(
@@ -136,12 +138,13 @@ export class Db {
 
   /** 事务包裹（sql.js 单线程，直接 BEGIN/COMMIT） */
   transaction<T>(fn: () => T): T {
+    if (this.txDepth > 0) return fn()
     this.db.run('BEGIN')
+    this.txDepth++
+    let r: T
     try {
-      const r = fn()
+      r = fn()
       this.db.run('COMMIT')
-      this.markDirty()
-      return r
     } catch (e) {
       try {
         this.db.run('ROLLBACK')
@@ -149,7 +152,11 @@ export class Db {
         /* ignore */
       }
       throw e
+    } finally {
+      this.txDepth--
     }
+    this.markDirty()
+    return r
   }
 
   private lastFlushAt = 0
@@ -158,7 +165,7 @@ export class Db {
   markDirty(): void {
     if (!this.dirty) this.dirtySince = Date.now()
     this.dirty = true
-    this.scheduleSave(false)
+    if (this.txDepth === 0) this.scheduleSave(false)
   }
 
   /**

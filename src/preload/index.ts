@@ -5,6 +5,8 @@ import type {
   ItemDetailRow,
   CheckProgressEvent,
   CheckSummary,
+  RefreshItemResult,
+  RemoveItemResult,
   DownloadProgressEvent,
   DownloadDoneEvent,
   DownloadSource,
@@ -41,6 +43,8 @@ export interface BoothAPI {
     imageThumbUrl(remoteUrl: string): Promise<string | null>
     openItemPage(id: number): Promise<void>
     openItemDir(id: number): Promise<string>
+    refreshItem(id: number): Promise<RefreshItemResult>
+    deleteItem(id: number): Promise<RemoveItemResult>
   }
   updates: {
     checkGlobal(): Promise<CheckSummary>
@@ -139,7 +143,9 @@ const api: BoothAPI = {
     imageUrl: (remoteUrl) => ipcRenderer.invoke('library:imageUrl', remoteUrl),
     imageThumbUrl: (remoteUrl) => ipcRenderer.invoke('library:imageThumbUrl', remoteUrl),
     openItemPage: (id) => ipcRenderer.invoke('library:openItemPage', id),
-    openItemDir: (id) => ipcRenderer.invoke('library:openItemDir', id)
+    openItemDir: (id) => ipcRenderer.invoke('library:openItemDir', id),
+    refreshItem: (id) => ipcRenderer.invoke('library:refreshItem', id),
+    deleteItem: (id) => ipcRenderer.invoke('library:deleteItem', id)
   },
   updates: {
     checkGlobal: () => ipcRenderer.invoke('updates:checkGlobal'),

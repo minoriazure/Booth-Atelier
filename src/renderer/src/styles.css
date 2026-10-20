@@ -790,6 +790,19 @@ select {
   align-items: center;
   flex-wrap: wrap;
 }
+.detail2-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+button.danger-solid {
+  background: var(--error);
+  border-color: var(--error);
+  color: #fff;
+}
+button.danger-solid:hover:not(:disabled) {
+  opacity: 0.9;
+}
 .detail2-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;

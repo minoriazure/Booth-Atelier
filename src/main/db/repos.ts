@@ -549,6 +549,20 @@ export class LibraryRepo {
     return this.db.transaction(fn)
   }
 
+  /** 删除某商品在所有表中的记录（单事务）。仅影响本地数据，BOOTH 端不受影响 */
+  deleteItemRows(itemId: number): void {
+    this.db.transaction(() => {
+      this.db.run('DELETE FROM item_images WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM item_videos WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM items_search WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM metadata_snapshots WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM file_history WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM download_records WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM downloadables WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM items WHERE item_id = ?', [itemId])
+    })
+  }
+
   /** 某商品某类别的图片（按 URL 原顺序不保证，调用方按 galleryUrls 排序） */
   listImagesByItem(itemId: number, kind?: string): Array<{ url: string; filename: string; status: string }> {
     if (kind) {

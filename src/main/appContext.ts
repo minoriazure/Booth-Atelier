@@ -1,4 +1,4 @@
-import { join, resolve } from 'path'
+import { dirname, join, resolve } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { BoothCookieJar } from './booth/cookieJar'
 import { NodeHttpClient, type HttpClient } from './booth/httpClient'
@@ -19,6 +19,7 @@ import { DownloadManager } from './services/downloadManager'
 import { StartupService } from './services/startupService'
 import { ImageLocalizer } from './services/imageLocalizer'
 import { VideoService } from './services/videoService'
+import { ItemRemovalService } from './services/itemRemovalService'
 import { createLogger } from './util/log'
 
 const log = createLogger('app')
@@ -42,6 +43,8 @@ export interface AppContext {
   sync: LibrarySyncService
   checker: UpdateCheckService
   downloads: DownloadManager
+  /** 单商品本地删除（DB + 数据目录 + 下载文件移入 deleted） */
+  removal: ItemRemovalService
   startup: StartupService
   /** 默认查找链解析出的 cookies 路径（settings 未指定覆盖时生效；清空覆盖后回到它） */
   defaultCookiesPath: string
@@ -57,6 +60,8 @@ export interface AppContextOptions {
   downloadRoot?: string
   /** HTTP 实现覆盖（生产可用 Electron net 实现） */
   http?: HttpClient
+  /** 已删除商品的下载文件归档根（应位于 exe 同级）；缺省为 exe 同级 deleted */
+  deletedRoot?: string
 }
 
 export async function createAppContext(opts: AppContextOptions): Promise<AppContext> {
@@ -135,6 +140,14 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   }
   const checker = new UpdateCheckService(deeplink, repo, downloads, () => settings.get().autoDownloadUpdates)
   const startup = new StartupService(auth, sync, checker, settings)
+  const removal = new ItemRemovalService(
+    repo,
+    paths,
+    downloads,
+    imageLocalizer,
+    videos,
+    opts.deletedRoot ?? join(dirname(process.execPath), 'deleted')
+  )
 
   log.info(`app context ready: data=${paths.dataRootPath} downloads=${paths.rootPath}`)
 
@@ -155,6 +168,7 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
     sync,
     checker,
     downloads,
+    removal,
     startup,
     defaultCookiesPath: opts.cookiesPath,
     dispose() {

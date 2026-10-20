@@ -220,6 +220,7 @@ if (!gotLock) {
     // portable 模式：所有工作文件（DB/图片/默认下载）都在 exe 同级目录，整体打包即可带走。
     // 非 portable（dev / 安装版）：沿用 userData。
     const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
+    const exeDir = portableDir ?? dirname(app.getPath('exe'))
     const dataDir =
       process.env.BOOTH_DATA_DIR || (portableDir ? resolve(portableDir, 'data') : app.getPath('userData'))
     const cookiesPath = resolveDefaultCookiesPath()
@@ -231,7 +232,8 @@ if (!gotLock) {
       ctx = await createAppContext({
         dataDir,
         cookiesPath,
-        downloadRoot: downloadRoot || undefined
+        downloadRoot: downloadRoot || undefined,
+        deletedRoot: resolve(exeDir, 'deleted')
       })
     } catch (e) {
       log.error('app context init failed:', e)

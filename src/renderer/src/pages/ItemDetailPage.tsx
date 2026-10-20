@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ItemDetailRow, ItemVideo } from '../../../shared/types'
 import type { VideoProgressEvent } from '../../../preload/index'
+import DeleteItemDialog from '../components/DeleteItemDialog'
 import { api } from '../api'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
@@ -294,6 +295,9 @@ export default function ItemDetailPage({
 }) {
   const [item, setItem] = useState<ItemDetailRow | null>(null)
   const [checking, setChecking] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [showDelete, setShowDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [downloading, setDownloading] = useState<number[]>([])
   const [videoStates, setVideoStates] = useState<Record<string, ItemVideo>>({})
   const [ytDlpOk, setYtDlpOk] = useState<boolean | null>(null)
@@ -399,6 +403,37 @@ export default function ItemDetailPage({
     }
   }
 
+  // 只刷新本商品的商店页数据（不抓列表、不下载文件）
+  const doRefresh = async (): Promise<void> => {
+    setRefreshing(true)
+    try {
+      const r = await api.library.refreshItem(itemId)
+      toast('info', r.changed ? '商品页已更新（元数据有变化，已保存旧版本快照）' : '商品页已检查，没有变化')
+      await load()
+      onChanged()
+    } catch (e) {
+      toast('error', `刷新失败：${e instanceof Error ? e.message : e}`)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  const doDelete = async (): Promise<void> => {
+    setDeleting(true)
+    try {
+      const r = await api.library.deleteItem(itemId)
+      toast('info', `已删除本地商品 #${itemId}${r.archivedTo ? '，下载文件已移入 deleted 文件夹' : ''}`)
+      for (const w of r.warnings) toast('warn', w)
+      setShowDelete(false)
+      onChanged()
+      onBack()
+    } catch (e) {
+      toast('error', `删除失败：${e instanceof Error ? e.message : e}`)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const doDownloadItem = async (): Promise<void> => {
     const n = await api.downloads.enqueueItem(itemId, 'bulk')
     toast('info', n > 0 ? `已加入队列：${n} 个文件` : '没有需要下载的文件')
@@ -500,6 +535,23 @@ export default function ItemDetailPage({
             在 BOOTH 打开 ↗
           </a>
         </div>
+        <div className="detail2-actions">
+          <button onClick={() => void doRefresh()} disabled={refreshing || deleting}>
+            {refreshing ? '刷新中…' : '🔄 检查当前商品页面更新'}
+          </button>
+          <button className="danger-solid" onClick={() => setShowDelete(true)} disabled={refreshing || deleting}>
+            🗑 删除当前商品
+          </button>
+        </div>
+        {showDelete && (
+          <DeleteItemDialog
+            itemId={itemId}
+            title={item.title}
+            busy={deleting}
+            onCancel={() => setShowDelete(false)}
+            onConfirm={() => void doDelete()}
+          />
+        )}
       </div>
 
       <div className="detail2-grid">

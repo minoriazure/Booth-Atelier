@@ -158,6 +158,18 @@ export class LibrarySyncService {
     log.info(`deeplink item ${itemId}: marked free (not checked against library)`)
   }
 
+  /**
+   * 单商品元数据刷新：只抓该商品的商店页并写入详情（同 applyDetail 逻辑），
+   * 不抓列表、不入队任何文件下载。对所有商品生效（含免费商品）。
+   * 返回元数据是否有变化；抓取失败直接抛出。
+   */
+  async refreshItem(itemId: number): Promise<{ changed: boolean }> {
+    const detail = await this.itemPage.fetch(itemId)
+    const changed = this.applyDetail(itemId, detail)
+    log.info(`refreshItem ${itemId}: ${changed ? 'changed' : 'unchanged'}`)
+    return { changed }
+  }
+
   /** 写入详情字段（变化时备份旧版本并写新快照）+ 登记图片与视频；返回元数据是否变化 */
   private applyDetail(itemId: number, detail: ItemDetail): boolean {
     const hash = metadataHashOf(detail)

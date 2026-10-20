@@ -152,6 +152,23 @@ export class ImageLocalizer {
     if (this.running === 0 && this.queue.length === 0) this.onIdle?.()
   }
 
+  /**
+   * 删除商品前清理图片后台任务：移除排队项与缩略图待办，并等待该商品进行中的下载收尾，
+   * 避免之后又在已删除的目录里写入文件。
+   */
+  async purgeItem(itemId: number, urls: string[], timeoutMs = 15_000): Promise<void> {
+    this.queue = this.queue.filter((q) => q.itemId !== itemId)
+    const dataDir = join(this.paths.itemDataDir(itemId), '')
+    this.thumbQueue = this.thumbQueue.filter((t) => !t.dest.startsWith(dataDir))
+    for (const dest of [...this.thumbWanted]) if (dest.startsWith(dataDir)) this.thumbWanted.delete(dest)
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline && urls.some((u) => this.activeUrls.has(u))) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    // 等待期间进行中的下载可能追加了缩略图待办，再清一次
+    this.thumbQueue = this.thumbQueue.filter((t) => !t.dest.startsWith(dataDir))
+  }
+
   private disposed = false
 
   /** 状态批量写：30 条或 3 秒刷一次（减压 sql.js） */

@@ -130,6 +130,19 @@ export interface CheckSummary {
   failed: number
 }
 
+/** 单商品刷新结果（只更新商品页数据） */
+export interface RefreshItemResult {
+  changed: boolean
+}
+
+/** 单商品本地删除结果 */
+export interface RemoveItemResult {
+  /** 下载文件被移入 deleted 的目标目录（无下载文件时为 null） */
+  archivedTo: string | null
+  /** 非致命问题提示（DB 已删除，但文件操作失败） */
+  warnings: string[]
+}
+
 /** 应用内深链宿主询问弹窗的载荷（主进程 checkDeepLinkHost 产出，renderer 弹窗消费） */
 export interface DeepLinkHostPrompt {
   /** 当前 HKCU 注册指向的可执行文件（null = 未注册） */

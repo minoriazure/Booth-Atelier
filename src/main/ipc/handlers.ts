@@ -112,6 +112,15 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     send('event:libraryUpdated', summary)
     return summary
   })
+  handle('library:refreshItem', async (itemId: unknown) => {
+    const rid = id.parse(itemId)
+    if (!ctx.repo.getItemDetail(rid)) throw new Error('本地不存在该商品')
+    return ctx.sync.refreshItem(rid)
+  })
+  handle('library:deleteItem', async (itemId: unknown) => {
+    const rid = id.parse(itemId)
+    return ctx.removal.remove(rid)
+  })
   handle('library:imageUrl', (remoteUrl: unknown) => {
     const u = q.parse(remoteUrl)
     // 商品图片本地化（images/ 原图；thumb/ 缩略图按需后台生成）

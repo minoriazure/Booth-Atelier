@@ -214,6 +214,16 @@ export class DownloadManager {
     return false
   }
 
+  /** 取消某商品的全部排队与进行中任务，并等待进行中任务收尾（写完记录、释放文件句柄） */
+  async cancelItem(itemId: number, timeoutMs = 10_000): Promise<void> {
+    for (const j of this.queue.filter((x) => x.itemId === itemId)) this.cancel(j.downloadableId)
+    for (const a of this.active.values()) if (a.itemId === itemId) a.abort.abort()
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline && [...this.active.values()].some((a) => a.itemId === itemId)) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
+
   /**
    * 认证过期：暂停派发。队列【不清空】，中断的活跃任务回队首（.part 保留）。
    * 恢复途径：认证检查通过时自动 resume（见 IPC auth:check）或用户点「开始下载」。
