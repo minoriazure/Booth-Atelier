@@ -124,4 +124,5 @@ GET https://booth.pm/downloadables/{id}/deeplink?client=booth-library-manager&va
 
 - 当前版本号以 `package.json` 的 `version` 为准。
 - 产物名为 `BoothAtelier-<version>-portable.exe`。
-- 协议 scheme、appId 与 `package.json` 的 `name` 属于命名空间，保持不变。
+- `package.json` 的 `name` 是 npm 包标识；`build.appId` 是 Windows 应用身份。当前 portable 版的 `userData` 路径由 `productName` 决定，为 `%APPDATA%\\Booth Atelier`。
+- BOOTH deeplink 的 `booth-library-manager://` scheme 与 `client=booth-library-manager` 是外部兼容标识，必须保持不变；它们不是应用的显示名称。

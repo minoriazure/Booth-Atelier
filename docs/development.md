@@ -71,12 +71,14 @@ npx electron .
 | 模式 | 数据库与日志 |
 | --- | --- |
 | 便携版 | exe 同级 `data/`，下载根默认 exe 同级 `downloads/` |
-| 开发版（`npm run dev`） | `%APPDATA%\booth-library-manager\` |
+| 开发版（`npm run dev`） | `%APPDATA%\Booth Atelier\` |
 
-日志位于 `%APPDATA%\booth-library-manager\logs\main.log`（便携版与开发版共用）。
+日志位于 `%APPDATA%\Booth Atelier\logs\main.log`（便携版与开发版共用）。
 
 ## 注意事项
 
-- **命名空间勿改**：协议 scheme `booth-library-manager://`、appId `pm.booth.librarymanager`、`package.json` 中的 `name` 决定了 `%APPDATA%` 的数据路径，修改会导致数据目录漂移。
+- Electron `userData` 当前为 `%APPDATA%\Booth Atelier\`，由 `productName` 决定。仅修改 npm 包名或 `appId` 不会改变此路径；现有设置和用户数据继续使用，不会迁移或删除。系统中若有其他历史数据目录，本程序不会自动导入或清理。
+- `appId` 是 Windows 应用/安装包身份，本项目当前发布的是便携版；未来如启用安装版，修改 `appId` 后须验证原位升级、快捷方式和卸载行为。
+- BOOTH 当前 deeplink 依赖固定 scheme `booth-library-manager://` 与 `client=booth-library-manager`，这两个外部兼容标识不随产品品牌更名。
 - 数据库使用 sql.js（WASM），不依赖需要本地编译的原生模块（如 better-sqlite3），因此打包时无需 Visual Studio。
 - 网络层、深链与 Cookie 相关改动前，请先阅读 [技术说明](architecture.md) 中的安全模型。

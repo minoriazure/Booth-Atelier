@@ -1,7 +1,7 @@
 {
-  "name": "booth-library-manager",
+  "name": "booth-atelier",
   "version": "1.1.0",
-  "description": "Booth Atelier - 自建 BOOTH 素材库管理器（官方 Booth Library Manager 替代品）",
+  "description": "Booth Atelier - 独立的 BOOTH 素材库管理工具",
   "main": "out/main/index.js",
   "author": "user",
   "license": "UNLICENSED",
@@ -41,7 +41,7 @@
     "vitest": "^2.1.0"
   },
   "build": {
-    "appId": "pm.booth.librarymanager",
+    "appId": "pm.booth.atelier",
     "productName": "Booth Atelier",
     "files": [
       "out/**/*",

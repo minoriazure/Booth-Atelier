@@ -221,7 +221,7 @@ export default function SettingsPage({
               <span className="slider" />
             </label>
             <span className="hint">
-              开启时，启动检查网页「在 Library Manager 中下载」按钮（booth-library-manager:// 深链）是否指向本程序；指向其它副本时询问是否注册。选择「不注册」会自动关闭本开关。
+              开启时，启动检查网页「DL with BOOTH Library Manager」按钮（booth-library-manager:// 深链）是否指向本程序；指向其它副本时询问是否注册。选择「不注册」会自动关闭本开关。
             </span>
           </div>
         </div>

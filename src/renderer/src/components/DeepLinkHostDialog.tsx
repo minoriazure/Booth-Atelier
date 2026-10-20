@@ -16,7 +16,7 @@ export default function DeepLinkHostDialog({
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>🔗 网页下载按钮指向其它程序</h2>
         <p>
-          BOOTH 网页上的「在 Library Manager 中下载」（booth-library-manager://）当前指向：
+          BOOTH 网页的「DL with BOOTH Library Manager」下载按钮（booth-library-manager://）当前指向：
           <br />
           <span className="code">{info.registeredPath ?? '（未注册）'}</span>
         </p>

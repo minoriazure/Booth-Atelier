@@ -3,7 +3,7 @@ import { sniffAuthFailure, type HttpClient } from './httpClient'
 import type { DeeplinkResult, Fingerprint } from '../../shared/types'
 
 /**
- * BOOTH 官方客户端（Booth Library Manager）deeplink 协议（已逆向验证；协议命名空间沿用官方，勿改）：
+ * BOOTH 官方 deeplink 兼容协议（已逆向验证；协议命名空间由 BOOTH 固定，勿改）：
  *
  *   GET https://booth.pm/downloadables/{id}/deeplink?client=booth-library-manager&variation_id={vid}
  *     → 302 Location: booth-library-manager://item-import?dlurl=<签名S3直链>&downloadable_filename=..&item_id=..&order_id=..

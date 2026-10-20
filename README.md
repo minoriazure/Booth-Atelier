@@ -2,7 +2,7 @@
 
 # Booth Atelier
 
-**BOOTH 素材库管理器，官方 BOOTH Library Manager 的替代品**
+**Booth Atelier 是一款独立的 BOOTH 素材库管理工具**
 
 ![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2B-0078D4?logo=windows&logoColor=white)
@@ -24,7 +24,7 @@
 - **库同步**：同步购买库与赠送库的全部元数据，支持本地浏览与搜索（不自动下载素材）
 - **精确更新检查**：精确到单个下载链接（官方只能到商品级），可自动检查与自动下载
 - **下载管理**：直接获取卖家上传的原始文件，多任务队列，断点续传，原子落盘
-- **深链接接管**：接管 BOOTH 网页的「用 BOOTH Library Manager 下载」按钮
+- **深链接接管**：接管 BOOTH 网页的「DL with BOOTH Library Manager」按钮
 - **历史保留**：旧版本文件与商品说明快照永久保留，可按日期回看
 - **便携版**：免安装，数据全部位于 exe 同级目录，整个文件夹拷走即可使用
 - **代理**：系统代理 / 自定义 / 直连三档，切换即时生效
