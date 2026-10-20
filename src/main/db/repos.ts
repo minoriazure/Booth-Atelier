@@ -34,7 +34,7 @@ export class LibraryRepo {
       )
     } else {
       this.db.run(
-        `UPDATE items SET title = ?, thumbnail_url = ?, is_gift = ?, is_free = ?, last_list_at = datetime('now') WHERE item_id = ?`,
+        `UPDATE items SET title = ?, thumbnail_url = ?, is_gift = ?, is_free = ?, last_list_at = datetime('now'), status = 'active', absent_count = 0 WHERE item_id = ?`,
         [input.title, input.thumbnailUrl, input.isGift ? 1 : 0, isFree, input.itemId]
       )
     }
@@ -117,7 +117,7 @@ export class LibraryRepo {
     const where = q ? 'WHERE (i.title LIKE ? OR i.shop_name LIKE ?)' : ''
     const params = q ? [`%${q}%`, `%${q}%`] : []
     return this.db.all<ItemSummary>(
-      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, i.thumbnail_url AS thumbnailUrl,
+      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, COALESCE(NULLIF(i.thumbnail_url, ''), i.og_image_url) AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
@@ -462,7 +462,7 @@ export class LibraryRepo {
     const list = Array.from(ids)
     const placeholders = list.map(() => '?').join(',')
     return this.db.all<ItemSummary>(
-      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, i.thumbnail_url AS thumbnailUrl,
+      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, COALESCE(NULLIF(i.thumbnail_url, ''), i.og_image_url) AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,

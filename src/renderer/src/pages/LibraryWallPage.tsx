@@ -39,7 +39,7 @@ function ItemCard({ item, onOpen }: { item: ItemSummary; onOpen: (id: number) =>
         <div className="badges">
           {item.isGift && <span className="badge gift">赠送</span>}
           {item.isFree && <span className="badge free">免费</span>}
-          {item.status === 'missing' && <span className="badge missing">已失效</span>}
+          {item.status === 'missing' && <span className="badge missing">已下架</span>}
           {item.fileUpdateAvailable > 0 && <span className="badge update">有更新 · {item.fileUpdateAvailable}</span>}
           {item.fileDownloaded > 0 && (
             <span className={`badge ${item.fileDownloaded === item.fileTotal && item.fileUpdateAvailable === 0 ? 'done' : ''}`}>
@@ -62,7 +62,7 @@ export default function LibraryWallPage({
 }) {
   const [items, setItems] = useState<ItemSummary[] | null>(null)
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<'all' | 'gift' | 'free' | 'undownloaded' | 'updates'>('all')
+  const [filter, setFilter] = useState<'all' | 'gift' | 'free' | 'undownloaded' | 'updates' | 'delisted'>('all')
 
   useEffect(() => {
     const onSearch = (e: Event): void => setQuery((e as CustomEvent<string>).detail)
@@ -114,6 +114,7 @@ export default function LibraryWallPage({
     if (filter === 'free') return i.isFree
     if (filter === 'undownloaded') return i.fileDownloaded < i.fileTotal
     if (filter === 'updates') return i.fileUpdateAvailable > 0
+    if (filter === 'delisted') return i.status === 'missing'
     return true
   })
 
@@ -128,6 +129,7 @@ export default function LibraryWallPage({
           <option value="free">仅免费</option>
           <option value="undownloaded">未下载完</option>
           <option value="updates">有文件更新</option>
+          <option value="delisted">已下架</option>
         </select>
         <span className="count">
           {filtered.length} / {items.length} 个商品

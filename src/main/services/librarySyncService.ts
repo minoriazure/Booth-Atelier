@@ -7,7 +7,7 @@ import type { ImageLocalizer } from './imageLocalizer'
 import { existsSync } from 'fs'
 import type { CheckProgressEvent, CheckSummary, ItemDetail } from '../../shared/types'
 import { localDate } from '../util/filenames'
-import { isAuthError } from '../booth/errors'
+import { BoothError, isAuthError } from '../booth/errors'
 import { createLogger } from '../util/log'
 
 const log = createLogger('librarySync')
@@ -123,6 +123,11 @@ export class LibrarySyncService {
           if (this.applyDetail(itemId, detail)) summary.libraryChanged++
         } catch (e) {
           if (isAuthError(e)) throw e
+          if (e instanceof BoothError && e.kind === 'not_found') {
+            this.repo.run(`UPDATE items SET status = 'missing' WHERE item_id = ?`, [itemId])
+            log.info(`item ${itemId} not found on BOOTH (404), marked missing`)
+            continue
+          }
           log.warn(`detail fetch failed ${itemId}:`, e instanceof Error ? e.message : e)
           summary.failed++
         }
