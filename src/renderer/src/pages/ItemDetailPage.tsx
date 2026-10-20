@@ -495,6 +495,7 @@ export default function ItemDetailPage({
           <span>{item.shopName || '未知店铺'}</span>
           <span>商品编号 #{item.itemId}</span>
           {item.isGift && <span className="badge gift">赠送</span>}
+          {item.isFree && <span className="badge free">免费</span>}
           <a href="#" onClick={(e) => { e.preventDefault(); void api.library.openItemPage(itemId) }} style={{ color: 'var(--accent)' }}>
             在 BOOTH 打开 ↗
           </a>

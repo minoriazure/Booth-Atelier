@@ -5,7 +5,7 @@ import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { ImageLocalizer } from './imageLocalizer'
 import { existsSync } from 'fs'
-import type { CheckProgressEvent, CheckSummary } from '../../shared/types'
+import type { CheckProgressEvent, CheckSummary, ItemDetail } from '../../shared/types'
 import { localDate } from '../util/filenames'
 import { isAuthError } from '../booth/errors'
 import { createLogger } from '../util/log'
@@ -74,10 +74,11 @@ export class LibrarySyncService {
         }
       }
 
-      // 2) 缺席检测（连续 2 次缺席 → missing）
+      // 2) 缺席检测（连续 2 次缺席 → missing）；免费商品不在列表中属正常，跳过
       const allIds = this.dbAllItemIds()
+      const freeIds = new Set(this.repo.listFreeItemIds())
       for (const id of allIds) {
-        if (!seen.has(id)) this.repo.markAbsent(id)
+        if (!seen.has(id) && !freeIds.has(id)) this.repo.markAbsent(id)
       }
 
       // 2b) 消失的下载链接：作者删除旧文件改名重传（_V2 等）时，旧 downloadable 不再出现在列表。
@@ -110,76 +111,16 @@ export class LibrarySyncService {
       }
       if (vanished > 0) log.info(`vanished downloadables archived: ${vanished}`)
 
-      // 3) 详情页刷新（节流）
+      // 3) 详情页刷新（节流）；免费商品的介绍随同步库更新，文件不在此处理
       const staleDays = this.opts.detailStaleDays ?? 7
-      const detailTargets = this.pickDetailTargets(Array.from(seen), staleDays, forceDetail)
+      const detailTargets = this.pickDetailTargets([...Array.from(seen), ...freeIds], staleDays, forceDetail)
       log.info(`detail refresh targets: ${detailTargets.length}`)
       for (let i = 0; i < detailTargets.length; i++) {
         const itemId = detailTargets[i]
         this.onProgress?.({ phase: 'library', current: i + 1, total: detailTargets.length, label: `商品详情 ${itemId}` })
         try {
           const detail = await this.itemPage.fetch(itemId)
-          const hash = metadataHashOf(detail)
-          const prev = this.repo.getMetadataHash(itemId)
-          const changed = prev !== hash
-          if (changed) {
-            // 变化前先备份旧版本（若从未快照过，把当前库里存的旧描述作为首个快照）
-            if (prev != null) {
-              const old = this.repo.getItemDetail(itemId)
-              if (old && old.descriptionHtml) {
-                this.history.writeMetadataSnapshot({
-                  itemId,
-                  title: old.title,
-                  descriptionHtml: old.descriptionHtml,
-                  ogImageUrl: old.ogImageUrl,
-                  galleryUrls: old.galleryUrls
-                })
-              }
-            }
-            this.repo.updateDetail({
-              itemId,
-              title: detail.title,
-              descriptionHtml: detail.descriptionHtml,
-              ogImageUrl: detail.ogImageUrl,
-              galleryUrls: detail.galleryUrls,
-              shopName: detail.shopName,
-              metadataHash: hash
-            })
-            // 新版本快照
-            this.history.writeMetadataSnapshot({
-              itemId,
-              title: detail.title,
-              descriptionHtml: detail.descriptionHtml,
-              ogImageUrl: detail.ogImageUrl,
-              galleryUrls: detail.galleryUrls
-            })
-            summary.libraryChanged++
-            log.info(`metadata changed: ${itemId} ${detail.title.slice(0, 40)}`)
-          } else {
-            // 仅刷新 last_detail_at
-            this.repo.updateDetail({
-              itemId,
-              title: detail.title,
-              descriptionHtml: detail.descriptionHtml,
-              ogImageUrl: detail.ogImageUrl,
-              galleryUrls: detail.galleryUrls,
-              shopName: detail.shopName,
-              metadataHash: hash
-            })
-          }
-          // 图片本地化（og + 画廊）：登记后后台下载，文字更新不等图片
-          const imgList: Array<{ url: string; kind: string }> = []
-          if (detail.ogImageUrl) imgList.push({ url: detail.ogImageUrl, kind: 'og' })
-          for (const u of detail.galleryUrls) imgList.push({ url: u, kind: 'gallery' })
-          if (imgList.length) this.images.registerItemImages(itemId, imgList)
-
-          // 视频登记（描述里内嵌的 iframe/链接）
-          const vids = extractVideos(detail.descriptionHtml)
-          if (vids.length) {
-            this.repo.upsertVideos(
-              vids.map((v) => ({ key: v.key, itemId, platform: v.platform, videoId: v.videoId, url: v.url, embedUrl: v.embedUrl }))
-            )
-          }
+          if (this.applyDetail(itemId, detail)) summary.libraryChanged++
         } catch (e) {
           if (isAuthError(e)) throw e
           log.warn(`detail fetch failed ${itemId}:`, e instanceof Error ? e.message : e)
@@ -195,6 +136,82 @@ export class LibrarySyncService {
     } finally {
       this.running = false
     }
+  }
+
+  /**
+   * 深链商品不在本地库时的处理：不联网查购买/赠送列表（耗时），直接视为免费商品建库。
+   * 抓取商店页信息建库并标记 is_free，同时登记深链所需的文件。
+   * 若该商品实为新购，下次全局同步库时会出现在列表中，列表写入会自动清除免费标记。
+   * 商店页抓取失败直接抛出，由调用方提示且不下载。
+   */
+  async importDeeplinkItem(itemId: number, files: Array<{ downloadableId: number; variationId: number | null; filename: string }>): Promise<void> {
+    const detail = await this.itemPage.fetch(itemId)
+    this.repo.upsertFromList({
+      itemId,
+      title: detail.title,
+      thumbnailUrl: detail.ogImageUrl ?? '',
+      isGift: false,
+      isFree: true,
+      downloadables: files.map((f) => ({ downloadableId: f.downloadableId, variationId: f.variationId, filename: f.filename }))
+    })
+    this.applyDetail(itemId, detail)
+    log.info(`deeplink item ${itemId}: marked free (not checked against library)`)
+  }
+
+  /** 写入详情字段（变化时备份旧版本并写新快照）+ 登记图片与视频；返回元数据是否变化 */
+  private applyDetail(itemId: number, detail: ItemDetail): boolean {
+    const hash = metadataHashOf(detail)
+    const prev = this.repo.getMetadataHash(itemId)
+    const changed = prev !== hash
+    if (changed) {
+      // 变化前先备份旧版本（若从未快照过，把当前库里存的旧描述作为首个快照）
+      if (prev != null) {
+        const old = this.repo.getItemDetail(itemId)
+        if (old && old.descriptionHtml) {
+          this.history.writeMetadataSnapshot({
+            itemId,
+            title: old.title,
+            descriptionHtml: old.descriptionHtml,
+            ogImageUrl: old.ogImageUrl,
+            galleryUrls: old.galleryUrls
+          })
+        }
+      }
+    }
+    this.repo.updateDetail({
+      itemId,
+      title: detail.title,
+      descriptionHtml: detail.descriptionHtml,
+      ogImageUrl: detail.ogImageUrl,
+      galleryUrls: detail.galleryUrls,
+      shopName: detail.shopName,
+      metadataHash: hash
+    })
+    if (changed) {
+      // 新版本快照
+      this.history.writeMetadataSnapshot({
+        itemId,
+        title: detail.title,
+        descriptionHtml: detail.descriptionHtml,
+        ogImageUrl: detail.ogImageUrl,
+        galleryUrls: detail.galleryUrls
+      })
+      log.info(`metadata changed: ${itemId} ${detail.title.slice(0, 40)}`)
+    }
+    // 图片本地化（og + 画廊）：登记后后台下载，文字更新不等图片
+    const imgList: Array<{ url: string; kind: string }> = []
+    if (detail.ogImageUrl) imgList.push({ url: detail.ogImageUrl, kind: 'og' })
+    for (const u of detail.galleryUrls) imgList.push({ url: u, kind: 'gallery' })
+    if (imgList.length) this.images.registerItemImages(itemId, imgList)
+
+    // 视频登记（描述里内嵌的 iframe/链接）
+    const vids = extractVideos(detail.descriptionHtml)
+    if (vids.length) {
+      this.repo.upsertVideos(
+        vids.map((v) => ({ key: v.key, itemId, platform: v.platform, videoId: v.videoId, url: v.url, embedUrl: v.embedUrl }))
+      )
+    }
+    return changed
   }
 
   private dbAllItemIds(): number[] {

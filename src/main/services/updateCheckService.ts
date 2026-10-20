@@ -36,6 +36,10 @@ export class UpdateCheckService {
   }
 
   async checkItem(itemId: number): Promise<CheckSummary> {
+    // 免费商品不参与文件更新检查（作者限定免费，下载后即收费，不会进入用户库）
+    if (this.repo.isFreeItem(itemId)) {
+      return { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
+    }
     const targets = this.repo.listDownloadablesOfItem(itemId)
     return this.checkMany(targets, `商品 ${itemId}`)
   }

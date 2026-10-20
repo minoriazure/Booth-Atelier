@@ -236,16 +236,8 @@ export function findProtocolArg(argv: string[]): string | null {
  *    （模拟原版：不排队、不等并发槽）。
  * dlurl 只用于提取 id（180s 过期），实际下载由 DownloadManager 按 downloadableId 重新 resolve。
  */
-export async function handleProtocolUrl(
-  raw: string,
-  deps: {
-    repo: import('./db/repos').LibraryRepo
-    downloads: import('./services/downloadManager').DownloadManager
-    emit: (channel: string, payload: unknown) => void
-    focusWindow: () => void
-  }
-): Promise<void> {
-  const { repo, downloads, emit, focusWindow } = deps
+export async function handleProtocolUrl(raw: string, deps: ProtocolDeps): Promise<void> {
+  const { focusWindow } = deps
   // ① 同步抢焦点（第一行，纯本地）—— 网络再差，浏览器失焦这步不受任何影响
   focusWindow()
   log.info(`deep link received: ${raw.split('?')[0]} (uptime ${Math.round(process.uptime() * 1000)}ms)`)
@@ -255,16 +247,16 @@ export async function handleProtocolUrl(
   await parseAndStart(raw, deps)
 }
 
-async function parseAndStart(
-  raw: string,
-  deps: {
-    repo: import('./db/repos').LibraryRepo
-    downloads: import('./services/downloadManager').DownloadManager
-    emit: (channel: string, payload: unknown) => void
-    focusWindow: () => void
-  }
-): Promise<void> {
-  const { repo, downloads, emit } = deps
+interface ProtocolDeps {
+  repo: import('./db/repos').LibraryRepo
+  downloads: import('./services/downloadManager').DownloadManager
+  sync: import('./services/librarySyncService').LibrarySyncService
+  emit: (channel: string, payload: unknown) => void
+  focusWindow: () => void
+}
+
+async function parseAndStart(raw: string, deps: ProtocolDeps): Promise<void> {
+  const { repo, downloads, emit, sync } = deps
   const parsed = parseItemImportUrl(raw)
   if (!parsed) {
     log.warn('unrecognized protocol url:', raw.slice(0, 160))
@@ -274,6 +266,19 @@ async function parseAndStart(
   log.info(`protocol import: item=${parsed.itemId} files=${parsed.files.length}`)
 
   try {
+    // 本地库完全没有这些文件 → 联网确认是已购/赠送（补全列表数据）还是免费商品（抓商店页建库）
+    const unknown = parsed.files.filter(
+      (f): f is typeof f & { downloadableId: number } => !!f.downloadableId && !repo.getDownloadable(f.downloadableId)
+    )
+    if (unknown.length > 0) {
+      const itemId = unknown[0].itemId || parsed.itemId
+      await sync.importDeeplinkItem(
+        itemId,
+        unknown.map((f) => ({ downloadableId: f.downloadableId, variationId: parsed.variationId, filename: f.filename }))
+      )
+      emit('event:toast', { level: 'info', message: `商品 #${itemId} 按免费商品建库，开始下载` })
+    }
+
     let started = 0
     let alreadyActive = 0
     let upToDate = 0
@@ -283,7 +288,7 @@ async function parseAndStart(
     const outcomes = await Promise.all(
       parsed.files.map(async (f) => {
         if (!f.downloadableId) return 'noid' as const
-        // 未同步过的商品/链接：建占位行，之后同步会补全元数据
+        // 未同步过的商品/链接：建占位行（导入成功后已存在则为空操作）
         repo.ensureAdhoc({
           itemId: f.itemId || parsed.itemId,
           downloadableId: f.downloadableId,

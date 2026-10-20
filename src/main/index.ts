@@ -153,6 +153,7 @@ async function deliverProtocolUrl(raw: string): Promise<void> {
   await handleProtocolUrl(raw, {
     repo: ctx.repo,
     downloads: ctx.downloads,
+    sync: ctx.sync,
     emit: (ch, payload) => {
       const w = mainWindow
       if (w && !w.isDestroyed() && !w.webContents.isDestroyed()) {

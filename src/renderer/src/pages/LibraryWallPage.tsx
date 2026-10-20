@@ -38,6 +38,7 @@ function ItemCard({ item, onOpen }: { item: ItemSummary; onOpen: (id: number) =>
         </div>
         <div className="badges">
           {item.isGift && <span className="badge gift">赠送</span>}
+          {item.isFree && <span className="badge free">免费</span>}
           {item.status === 'missing' && <span className="badge missing">已失效</span>}
           {item.fileUpdateAvailable > 0 && <span className="badge update">有更新 · {item.fileUpdateAvailable}</span>}
           {item.fileDownloaded > 0 && (
@@ -61,7 +62,7 @@ export default function LibraryWallPage({
 }) {
   const [items, setItems] = useState<ItemSummary[] | null>(null)
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<'all' | 'gift' | 'undownloaded' | 'updates'>('all')
+  const [filter, setFilter] = useState<'all' | 'gift' | 'free' | 'undownloaded' | 'updates'>('all')
 
   useEffect(() => {
     const onSearch = (e: Event): void => setQuery((e as CustomEvent<string>).detail)
@@ -110,6 +111,7 @@ export default function LibraryWallPage({
 
   const filtered = (items ?? []).filter((i) => {
     if (filter === 'gift') return i.isGift
+    if (filter === 'free') return i.isFree
     if (filter === 'undownloaded') return i.fileDownloaded < i.fileTotal
     if (filter === 'updates') return i.fileUpdateAvailable > 0
     return true
@@ -123,6 +125,7 @@ export default function LibraryWallPage({
         <select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}>
           <option value="all">全部商品</option>
           <option value="gift">仅赠送</option>
+          <option value="free">仅免费</option>
           <option value="undownloaded">未下载完</option>
           <option value="updates">有文件更新</option>
         </select>

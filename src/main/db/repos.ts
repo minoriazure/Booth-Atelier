@@ -12,28 +12,30 @@ import type {
 export class LibraryRepo {
   constructor(private db: Db) {}
 
-  /** 列表页同步：upsert 商品基础字段（不覆盖详情字段） */
+  /** 列表页同步：upsert 商品基础字段（不覆盖详情字段）；isFree 仅用于深链建立的免费商品 */
   upsertFromList(input: {
     itemId: number
     title: string
     thumbnailUrl: string
     isGift: boolean
+    isFree?: boolean
     downloadables: Array<{ downloadableId: number; variationId: number | null; filename: string; fallbackUrl?: string }>
   }): void {
     const existing = this.db.get<{ item_id: number; metadata_hash: string | null }>(
       'SELECT item_id, metadata_hash FROM items WHERE item_id = ?',
       [input.itemId]
     )
+    const isFree = input.isFree ? 1 : 0
     if (!existing) {
       this.db.run(
-        `INSERT INTO items (item_id, title, thumbnail_url, is_gift, item_url, last_list_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'))`,
-        [input.itemId, input.title, input.thumbnailUrl, input.isGift ? 1 : 0, `https://booth.pm/zh-cn/items/${input.itemId}`]
+        `INSERT INTO items (item_id, title, thumbnail_url, is_gift, is_free, item_url, last_list_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [input.itemId, input.title, input.thumbnailUrl, input.isGift ? 1 : 0, isFree, `https://booth.pm/zh-cn/items/${input.itemId}`]
       )
     } else {
       this.db.run(
-        `UPDATE items SET title = ?, thumbnail_url = ?, is_gift = ?, last_list_at = datetime('now') WHERE item_id = ?`,
-        [input.title, input.thumbnailUrl, input.isGift ? 1 : 0, input.itemId]
+        `UPDATE items SET title = ?, thumbnail_url = ?, is_gift = ?, is_free = ?, last_list_at = datetime('now') WHERE item_id = ?`,
+        [input.title, input.thumbnailUrl, input.isGift ? 1 : 0, isFree, input.itemId]
       )
     }
     for (const d of input.downloadables) {
@@ -95,6 +97,14 @@ export class LibraryRepo {
     return this.db.all<{ item_id: number }>('SELECT item_id FROM items').map((r) => r.item_id)
   }
 
+  listFreeItemIds(): number[] {
+    return this.db.all<{ item_id: number }>('SELECT item_id FROM items WHERE is_free = 1').map((r) => r.item_id)
+  }
+
+  isFreeItem(itemId: number): boolean {
+    return this.db.get<{ is_free: number }>('SELECT is_free FROM items WHERE item_id = ?', [itemId])?.is_free === 1
+  }
+
   getMetadataHash(itemId: number): string | null {
     return this.db.get<{ metadata_hash: string | null }>('SELECT metadata_hash FROM items WHERE item_id = ?', [itemId])?.metadata_hash ?? null
   }
@@ -108,7 +118,7 @@ export class LibraryRepo {
     const params = q ? [`%${q}%`, `%${q}%`] : []
     return this.db.all<ItemSummary>(
       `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, i.thumbnail_url AS thumbnailUrl,
-              i.is_gift AS isGift, i.status AS status,
+              i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
               SUM(CASE WHEN d.status = 'update_available' THEN 1 ELSE 0 END) AS fileUpdateAvailable
@@ -121,7 +131,7 @@ export class LibraryRepo {
 
   getItemDetail(itemId: number): ItemDetailRow | undefined {
     const i = this.db.get<Record<string, unknown>>(
-      `SELECT item_id, title, shop_name, thumbnail_url, og_image_url, description_html, gallery_json, item_url, is_gift, status, metadata_hash
+      `SELECT item_id, title, shop_name, thumbnail_url, og_image_url, description_html, gallery_json, item_url, is_gift, is_free, status, metadata_hash
        FROM items WHERE item_id = ?`,
       [itemId]
     )
@@ -146,6 +156,7 @@ export class LibraryRepo {
       shopName: (i.shop_name as string) ?? null,
       thumbnailUrl: (i.thumbnail_url as string) ?? null,
       isGift: Number(i.is_gift) === 1,
+      isFree: Number(i.is_free) === 1,
       status: (i.status as 'active' | 'missing') ?? 'active',
       itemUrl: String(i.item_url ?? ''),
       ogImageUrl: (i.og_image_url as string) ?? null,
@@ -165,7 +176,9 @@ export class LibraryRepo {
     return this.db.all(
       `SELECT downloadable_id AS downloadableId, item_id AS itemId, filename, variation_id AS variationId,
               status, last_etag AS lastEtag, last_size AS lastSize, local_path AS localPath
-       FROM downloadables WHERE status != 'missing' ORDER BY item_id, downloadable_id ${limit ? 'LIMIT ' + limit : ''}`
+       FROM downloadables
+       WHERE status != 'missing' AND item_id NOT IN (SELECT item_id FROM items WHERE is_free = 1)
+       ORDER BY item_id, downloadable_id ${limit ? 'LIMIT ' + limit : ''}`
     )
   }
 
@@ -194,6 +207,7 @@ export class LibraryRepo {
          WHERE d.status IN ('remote', 'update_available')
            AND d.queued_at IS NULL
            AND d.status != 'missing'
+           AND d.item_id NOT IN (SELECT item_id FROM items WHERE is_free = 1)
            AND NOT EXISTS (
              SELECT 1 FROM download_records r
              WHERE r.downloadable_id = d.downloadable_id
@@ -449,7 +463,7 @@ export class LibraryRepo {
     const placeholders = list.map(() => '?').join(',')
     return this.db.all<ItemSummary>(
       `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, i.thumbnail_url AS thumbnailUrl,
-              i.is_gift AS isGift, i.status AS status,
+              i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
               SUM(CASE WHEN d.status = 'update_available' THEN 1 ELSE 0 END) AS fileUpdateAvailable
@@ -607,6 +621,6 @@ function safeJsonArray(v: unknown): string[] {
 }
 
 /** SQLite is_gift 是 0/1 → 转为真 boolean（避免 React 渲染出 0） */
-function boolifyItem<T extends { isGift: unknown }>(row: T): T & { isGift: boolean } {
-  return { ...row, isGift: Number(row.isGift) === 1 }
+function boolifyItem<T extends { isGift: unknown; isFree: unknown }>(row: T): T & { isGift: boolean; isFree: boolean } {
+  return { ...row, isGift: Number(row.isGift) === 1, isFree: Number(row.isFree) === 1 }
 }

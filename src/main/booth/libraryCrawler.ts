@@ -38,7 +38,6 @@ export class LibraryCrawler {
       onPage?.(kind, page, pageItems.length)
       if (pageItems.length === 0) break // 空页 = 已到最后
       items.push(...pageItems)
-      // 页内条目少于 20 且无下一页链接，也可能是最后一页；仍由空页兜底
     }
     return items
   }

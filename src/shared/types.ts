@@ -65,6 +65,8 @@ export interface ItemSummary {
   /** 本地缩略图的 media URL（已下载时非空） */
   localThumb: string | null
   isGift: boolean
+  /** 深链确认不在库中而建立的免费商品（仅深链下载，不参与全局/批量更新） */
+  isFree: boolean
   status: ItemStatus
   fileTotal: number
   fileDownloaded: number

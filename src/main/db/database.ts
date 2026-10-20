@@ -89,6 +89,13 @@ export class Db {
       this.markDirty()
       log.info('migrations applied: 004_split_startup_settings')
     }
+    if (Number(version) < 7) {
+      // 免费商品：深链下载时确认不在库中而建立的商品（仅通过深链下载，不参与批量/全局更新）
+      this.db.run(`ALTER TABLE items ADD COLUMN is_free INTEGER NOT NULL DEFAULT 0`)
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (7, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 007_items_is_free')
+    }
   }
 
   exec(sql: string): void {

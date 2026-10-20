@@ -3,6 +3,7 @@ import { existsSync } from 'fs'
 import { z } from 'zod'
 import type { AppContext } from '../appContext'
 import { isAuthError } from '../booth/errors'
+import { applyProxySettings, resolveSystemProxy } from '../booth/systemFetch'
 import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
 
@@ -60,7 +61,6 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     const next = ctx.settings.set(p as never)
     // 代理设置变更：立即热应用（无需重启），随后 UI 刷新 proxyInfo 即可看到新值
     if ('proxyMode' in p || 'customProxy' in p) {
-      const { applyProxySettings } = await import('../booth/systemFetch')
       await applyProxySettings(next.proxyMode, next.customProxy)
     }
     // cookies 路径变更：立即热应用（空 = 清除覆盖 → 回默认查找链）
@@ -221,7 +221,6 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
 
   // ── 系统代理状态（设置页展示；下载实际走 Chromium 栈自动应用） ──
   handle('system:proxyInfo', async () => {
-    const { resolveSystemProxy } = await import('../booth/systemFetch')
     return resolveSystemProxy()
   })
 
