@@ -124,7 +124,7 @@ function createWindow(): void {
 /**
  * 加载渲染进程（必须在 registerIpc 之后调用——renderer 一挂载就 invoke settings:get，
  * 此前调用会因无 handler 卡在「加载中」）。
- * 窗口本体（createWindow）则要更早创建：深链冷启动时浏览器在等失焦，见 DEEP-LINK.md §4.2 F3。
+ * 窗口本体（createWindow）则要更早创建：深链冷启动时浏览器在等失焦。
  */
 function loadMainWindow(): void {
   if (!mainWindow) return
@@ -174,7 +174,7 @@ if (!gotLock) {
   registerProtocols()
 
   app.on('second-instance', (_e, argv) => {
-    // F1（DEEP-LINK.md）：先抢前台再干别的 —— 页面在等浏览器失焦，慢一步就报「应用打开异常」
+    // 先抢前台再干别的 —— 页面在等浏览器失焦，慢一步就报「应用打开异常」
     focusMainWindow(mainWindow)
     const url = findProtocolArg(argv)
     if (url) {
@@ -203,7 +203,7 @@ if (!gotLock) {
   async function bootApp(): Promise<void> {
     setupImageProtocol()
 
-    // 深链冷启动优化（DEEP-LINK.md §4.2 F3）：窗口最先可见（不加载 renderer），
+    // 深链冷启动优化：窗口最先可见（不加载 renderer），
     // DB/队列/网络等重活全部排在它后面 —— 浏览器只要窗口失焦就判成功。
     createWindow()
     log.info(`window created (uptime ${Math.round(process.uptime() * 1000)}ms)`)

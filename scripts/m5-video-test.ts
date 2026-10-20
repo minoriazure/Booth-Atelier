@@ -17,7 +17,7 @@ async function main() {
   }
   console.log('✓ 协议解析正确（item-import?dlurl= 形态）')
 
-  // 形态 B：网页端 import?item_id=&dlurls[]=（DEEP-LINK.md §3）
+  // 形态 B：网页端 import?item_id=&dlurls[]=
   const sampleWeb =
     'booth-library-manager://import?item_id=8749497&order_id=86808700&variation_id=14611009' +
     '&dlurls[]=https%3A%2F%2Fs6.booth.pm%2Fuuid%2Ff%2F8749497%2F9535314%2F_a.zip%3FX-Amz-Expires%3D180' +

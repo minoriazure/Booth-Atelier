@@ -43,7 +43,7 @@ jobs:
       - name: Package portable exe
         # 缓存型便携版：electron-builder --dir + 自研 NSIS 启动器 stub（scripts/build-portable.mjs）
         # 首启解压到 %LOCALAPPDATA% 缓存、之后直启。NSIS 工具链由脚本自动准备（复用缓存或官方源下载+校验）。
-        # 安装版（NSIS 安装包）按要求暂停，见 AI_Should_Read/INSTALLER.md
+        # 安装版（NSIS 安装包）暂不构建发布
         # 不需要代码签名；禁用 electron-builder 自动探测证书
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

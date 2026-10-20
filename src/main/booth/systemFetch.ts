@@ -4,7 +4,7 @@
  *   绝不允许落 defaultSession——defaultSession 的 cookie 库持久化在 %APPDATA% 共享给
  *   同机所有副本，曾导致 _plaza_session 登录态跨副本泄露（无 cookies 文件也能登录）。
  *   登录态唯一权威来源是 booth_cookies.txt（显式 Cookie 头注入），
- *   见 AI_Should_Read/booth-manager-project.md §4 安全模型。
+ *   详见 docs/architecture.md「凭据模型」。
  * - systemFetch：session.fetch，用于普通请求（redirect: follow）。
  * - systemManualGet：net.fetch 的 redirect:'manual' 实现有缺陷——收到 302 会以
  *   "Redirect was cancelled" reject，根本读不到 Location。manual 语义必须走

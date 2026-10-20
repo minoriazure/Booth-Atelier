@@ -19,7 +19,7 @@ export interface ProtocolImportFile {
 }
 
 /**
- * booth-library-manager:// 深链（两种形态，见 DEEP-LINK.md §3）：
+ * booth-library-manager:// 深链（两种形态）：
  * - A（网页端按钮 / 购买下载页）：
  *   booth-library-manager://import?item_id=&order_id=&variation_id=&dlurls[]=&filenames[]=
  * - B（/downloadables/{id}/deeplink 端点302）：
@@ -230,7 +230,7 @@ export function findProtocolArg(argv: string[]): string | null {
 }
 
 /**
- * 协议链接处理入口（顺序遵循 DEEP-LINK.md §6）：
+ * 协议链接处理入口：
  * ① 第一行抢前台 —— 页面在等浏览器失焦，重活一律延后；
  * ② 解析两种形态 → 确保 DB 行存在（未同步的先建占位）→ downloadNow 直接进下载中
  *    （模拟原版：不排队、不等并发槽）。
@@ -335,7 +335,7 @@ async function parseAndStart(
 }
 
 /**
- * 把窗口带到前台（DEEP-LINK.md §6 组合拳）：
+ * 把窗口带到前台（组合拳）：
  * Windows 前台锁会让普通 focus() 静默失败 → show + focus + moveTop +
  * 短暂置顶抖动 + 任务栏闪烁兜底，确保页面的 blur 检测在超时窗口内通过。
  */
