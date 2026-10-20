@@ -4,7 +4,7 @@
 
 **Booth Atelier 是一款独立的 BOOTH 素材库管理工具**
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2B-0078D4?logo=windows&logoColor=white)
 ![Electron](https://img.shields.io/badge/Electron-33-9FEAF9?logo=electron&logoColor=black)
 ![Node.js](https://img.shields.io/badge/Node.js-24%2B-339933?logo=node.js&logoColor=white)

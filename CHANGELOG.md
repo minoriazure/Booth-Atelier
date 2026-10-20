@@ -2,6 +2,23 @@
 
 本文件记录项目的主要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-10-20
+
+### 新增
+
+- 在商品详情页支持刷新商品信息和从本地库删除商品。
+- 通过 BOOTH 深链接打开尚未加入本地库的商品时，按免费商品处理。
+
+### 变更
+
+- 商品下架后标记为已下架；封面不可用时回退使用商店图片。
+- 将品牌与 Windows 应用标识更新为 Booth Atelier，同时保留 BOOTH 现有 `booth-library-manager://` 深链接协议及 `client=booth-library-manager` 参数，确保兼容。
+
+### 修复
+
+- 修复 Cookie 登录状态的跨电脑使用问题，并将请求会话绑定到当前 Cookie 文件。
+- 修复重复点击 BOOTH 深链接导致同一文件重复下载的问题。
+
 ## [1.1.0] - 2026-10-16
 
 ### 新增
