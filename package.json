@@ -3,7 +3,10 @@
   "version": "1.2.0",
   "description": "Booth Atelier - 独立的 BOOTH 素材库管理工具",
   "main": "out/main/index.js",
-  "author": "user",
+  "author": {
+    "name": "minoriazure",
+    "url": "https://github.com/minoriazure"
+  },
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
