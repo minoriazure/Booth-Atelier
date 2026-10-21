@@ -84,9 +84,9 @@ async function main() {
     const lost = repo.listAllDownloadables().find((f) => f.status === 'downloaded' && f.localPath)
     if (lost && existsSync(lost.localPath!)) {
       rmSync(lost.localPath!)
-      const fixed = repo.validateLocalFiles((p) => existsSync(p))
+      repo.releaseMissingLocal(lost.downloadableId)
       const after = repo.getDownloadable(lost.downloadableId)
-      console.log(`删除 ${lost.filename} → validate 修复 ${fixed} 个 → status=${after?.status}`)
+      console.log(`删除 ${lost.filename} → release → status=${after?.status}`)
       if (after?.status !== 'remote') throw new Error('文件丢失应回待下载')
       console.log('✓ 文件丢失回待下载')
       // 恢复文件状态（重新标记 downloaded，避免污染后续）

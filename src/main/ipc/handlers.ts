@@ -68,10 +68,13 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
       ctx.jar.setPath(String(next.cookiesPath || '').trim() || ctx.defaultCookiesPath)
       log.info(`cookies path applied: ${ctx.jar.filePathRef}`)
     }
+    // 下载根变更：按新目录重新识别已下载文件（目录不存在时自动跳过，不改动记录）
+    if ('downloadRoot' in p) {
+      const r = ctx.reconcileLocal()
+      log.info(`download root changed, reconcile: skipped=${r.skipped} recognized=${r.recognized} released=${r.released}`)
+    }
     return next
   })
-
-  // ── library ──
   const withLocalThumbs = <T extends { itemId: number; thumbnailUrl: string | null }>(
     rows: T[]
   ): Array<T & { localThumb: string | null }> =>

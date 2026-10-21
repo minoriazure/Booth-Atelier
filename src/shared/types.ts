@@ -152,7 +152,10 @@ export interface DeepLinkHostPrompt {
 }
 
 export interface Settings {
+  /** 下载根绝对路径（运行时解析：默认值随 exe 所在位置变化） */
   downloadRoot: string
+  /** 已设置的下载根目录当前不存在（如外接盘未挂载）；此时下载不会回退到默认目录 */
+  downloadRootMissing: boolean
   /**
    * Cookie 文件覆盖路径（'' = 未指定，走默认查找链：exe 同级 → cwd → exe 目录 → appPath → userData）。
    * 指定后每次启动以该路径为准认证；路径必须真实存在才能保存。

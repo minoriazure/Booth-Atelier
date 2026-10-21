@@ -233,6 +233,7 @@ if (!gotLock) {
         dataDir,
         cookiesPath,
         downloadRoot: downloadRoot || undefined,
+        baseDir: portableDir ?? null,
         deletedRoot: resolve(exeDir, 'deleted')
       })
     } catch (e) {

@@ -20,6 +20,7 @@ import { StartupService } from './services/startupService'
 import { ImageLocalizer } from './services/imageLocalizer'
 import { VideoService } from './services/videoService'
 import { ItemRemovalService } from './services/itemRemovalService'
+import { reconcileLocalFiles, type ReconcileResult } from './services/localFileReconciler'
 import { createLogger } from './util/log'
 
 const log = createLogger('app')
@@ -48,6 +49,8 @@ export interface AppContext {
   startup: StartupService
   /** 默认查找链解析出的 cookies 路径（settings 未指定覆盖时生效；清空覆盖后回到它） */
   defaultCookiesPath: string
+  /** 按磁盘重新识别下载文件（修改下载目录后调用） */
+  reconcileLocal: () => ReconcileResult
   dispose(): void
 }
 
@@ -56,8 +59,10 @@ export interface AppContextOptions {
   dataDir: string
   /** cookies 默认查找链解析出的路径（settings.cookiesPath 覆盖项为空时生效） */
   cookiesPath: string
-  /** 下载根目录（空则用 dataDir/downloads 作为默认） */
+  /** 默认下载根目录（未设置用户目录时使用，不落库）；缺省为 dataDir/downloads */
   downloadRoot?: string
+  /** portable 模式下 exe 所在目录：用于把下载根存为相对路径，整目录搬家后仍可用；非 portable 传 null/缺省 */
+  baseDir?: string | null
   /** HTTP 实现覆盖（生产可用 Electron net 实现） */
   http?: HttpClient
   /** 已删除商品的下载文件归档根（应位于 exe 同级）；缺省为 exe 同级 deleted */
@@ -70,18 +75,15 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   // DB 先行：settings.cookiesPath 覆盖项决定 jar 的实际路径，必须先能读设置
   const db = new Db(join(opts.dataDir, 'library.db'), resolve(__dirname, '../../node_modules/sql.js/dist/sql-wasm.wasm'))
   await db.open()
-  const repo = new LibraryRepo(db)
 
-  // 设置优先：用户已保存的 downloadRoot 优先于默认值（portable/首次启动才用 opts 默认）
   // 双根：数据根 = dataDir（图片/视频/快照/描述），下载根 = 素材文件（只放 booth 下载物）
-  const bootPaths = new Paths(opts.dataDir, opts.downloadRoot || join(opts.dataDir, 'downloads'))
-  const settings = new SettingsService(repo, bootPaths)
-  const s0 = settings.get()
-  if (!settings.hasDownloadRoot() && opts.downloadRoot) {
-    settings.set({ downloadRoot: opts.downloadRoot })
-  }
-  const paths = new Paths(opts.dataDir, settings.get().downloadRoot)
-  bootPaths.setRoot(paths.rootPath)
+  // 全局只用这一个 Paths 实例：设置变更 setRoot 后，下载/仓储立即生效，无需重启
+  const defaultRoot = opts.downloadRoot || join(opts.dataDir, 'downloads')
+  const paths = new Paths(opts.dataDir, defaultRoot, opts.baseDir ?? null)
+  const repo = new LibraryRepo(db, paths)
+  // 未设置用户下载目录时，默认根随 exe 位置变化（不落库）；用户设置过则按存储值还原
+  const settings = new SettingsService(repo, paths, defaultRoot)
+  paths.setRoot(settings.get().downloadRoot)
 
   // cookies 路径：设置覆盖项（settings.cookiesPath）非空且文件真实存在 → 以它为准；
   // 否则回默认查找链（opts.cookiesPath，portable = exe 同级优先）。
@@ -118,12 +120,13 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
     log.warn('apply proxy settings failed:', e)
   }
 
-  // 启动顺序：① 文件丢失校验（downloaded 但本地被删 → 回待下载）
+  // 启动顺序：① 本地文件对账（根目录存在时识别已下载文件；缺失的已下载文件回待下载但保留远端指纹；根不存在则跳过）
   try {
-    const fixed = repo.validateLocalFiles((p) => existsSync(p))
-    if (fixed > 0) log.info(`local file validation: ${fixed} missing → back to pending`)
+    const r = reconcileLocalFiles(repo, paths)
+    if (r.skipped) log.warn(`download root missing, reconcile skipped: ${paths.rootPath}`)
+    else log.info(`local file reconcile: recognized=${r.recognized} released=${r.released}`)
   } catch (e) {
-    log.warn('validateLocalFiles failed:', e)
+    log.warn('reconcileLocalFiles failed:', e)
   }
 
   const history = new HistoryManager(repo, paths)
@@ -171,6 +174,7 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
     removal,
     startup,
     defaultCookiesPath: opts.cookiesPath,
+    reconcileLocal: () => reconcileLocalFiles(repo, paths),
     dispose() {
       downloads.dispose()
       imageLocalizer.dispose()

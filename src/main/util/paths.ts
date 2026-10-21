@@ -1,6 +1,22 @@
-import { join } from 'path'
+import { isAbsolute, join, relative, resolve, sep } from 'path'
 import { existsSync } from 'fs'
 import { localDate, sanitizeFilename } from './filenames'
+
+/**
+ * 把绝对路径转换为相对 base 的存储形式；不在 base 内则保留绝对路径。
+ * 相对形式使整个 exe 目录搬家后仍能解析到同一位置。
+ */
+export function toStoredPath(base: string, abs: string): string {
+  const rel = relative(base, abs)
+  if (rel === '') return '.'
+  if (isAbsolute(rel) || rel === '..' || rel.startsWith('..' + sep)) return abs
+  return rel
+}
+
+/** 把存储值还原为绝对路径（兼容旧版本存下的绝对路径） */
+export function fromStoredPath(base: string, stored: string): string {
+  return isAbsolute(stored) ? stored : resolve(base, stored)
+}
 
 /**
  * 双根路径（用户要求 #1）：
@@ -8,11 +24,13 @@ import { localDate, sanitizeFilename } from './filenames'
  * - 下载根 downloadRoot：只有 booth 链接下载的素材文件 → {downloadRoot}/{item_id}/current|history
  *
  * 这样 downloads 目录可直接逐层点进去把文件拖进 Unity，data 目录可整体视作程序数据。
+ * baseDir：portable 模式下为 exe 同级目录，下载根若位于其内则以相对路径持久化。
  */
 export class Paths {
   constructor(
     private dataRoot: string,
-    private downloadRoot: string
+    private downloadRoot: string,
+    private baseDir: string | null = null
   ) {}
 
   /** 下载根（兼容旧接口：Settings 默认值用） */
@@ -26,6 +44,36 @@ export class Paths {
 
   setRoot(root: string): void {
     this.downloadRoot = root
+  }
+
+  /** 下载根 → 设置存储值（位于 baseDir 内时为相对路径） */
+  encodeRootSetting(abs: string): string {
+    return this.baseDir ? toStoredPath(this.baseDir, abs) : abs
+  }
+
+  /** 设置存储值 → 下载根绝对路径 */
+  decodeRootSetting(stored: string): string {
+    return this.baseDir ? fromStoredPath(this.baseDir, stored) : resolve(stored)
+  }
+
+  /** 下载文件 localPath → 存储值（相对下载根） */
+  toStoredLocal(abs: string): string {
+    return toStoredPath(this.downloadRoot, abs)
+  }
+
+  /** 下载文件存储值 → 绝对路径 */
+  resolveLocal(stored: string): string {
+    return fromStoredPath(this.downloadRoot, stored)
+  }
+
+  /** 视频文件 localPath → 存储值（相对数据根） */
+  toStoredDataLocal(abs: string): string {
+    return toStoredPath(this.dataRoot, abs)
+  }
+
+  /** 视频文件存储值 → 绝对路径 */
+  resolveDataLocal(stored: string): string {
+    return fromStoredPath(this.dataRoot, stored)
   }
 
   // ── 数据侧（dataRoot/items/{id}） ──

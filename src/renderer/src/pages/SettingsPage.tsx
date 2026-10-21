@@ -48,7 +48,7 @@ export default function SettingsPage({
     try {
       const s = await api.settings.set(p)
       onSettings(s)
-      if (p.downloadRoot !== undefined) toast('info', '下载目录已更新（已下载文件不会移动）')
+      if (p.downloadRoot !== undefined) toast('info', '下载目录已更新，已按新目录自动识别已下载文件')
       if ('proxyMode' in p || 'customProxy' in p) refreshProxy()
       if ('cookiesPath' in p) {
         refreshCookiesDisplay()
@@ -102,6 +102,11 @@ export default function SettingsPage({
             <button onClick={() => void chooseDir((p) => patch({ downloadRoot: p }), toast)}>更改…</button>
             <button onClick={() => void api.history.openPath(settings.downloadRoot)}>打开</button>
           </div>
+          {settings.downloadRootMissing && (
+            <div className="value" style={{ color: 'var(--danger, #c0392b)' }}>
+              下载目录不存在（可能已被移动或外接盘未挂载）。目录恢复后会自动识别已下载文件；请勿在此目录缺失时重新下载。
+            </div>
+          )}
         </div>
         <div className="setting-row">
           <div className="label">Cookie 文件</div>

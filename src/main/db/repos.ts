@@ -1,4 +1,5 @@
 import type { Db } from './database'
+import type { Paths } from '../util/paths'
 import type {
   DownloadableFileRow,
   DownloadableStatus,
@@ -10,7 +11,29 @@ import type {
 
 /** items + downloadables 读写 */
 export class LibraryRepo {
-  constructor(private db: Db) {}
+  /** paths 用于 local_path 的相对存储：写入转相对，读取还原绝对（旧版绝对路径仍兼容） */
+  constructor(
+    private db: Db,
+    private paths?: Paths
+  ) {}
+
+  private downloadLocalOut(p: string | null | undefined): string | null {
+    if (!p) return null
+    return this.paths ? this.paths.resolveLocal(p) : p
+  }
+
+  private downloadLocalIn(abs: string): string {
+    return this.paths ? this.paths.toStoredLocal(abs) : abs
+  }
+
+  private dataLocalOut(p: string | null | undefined): string | null {
+    if (!p) return null
+    return this.paths ? this.paths.resolveDataLocal(p) : p
+  }
+
+  private dataLocalIn(abs: string): string {
+    return this.paths ? this.paths.toStoredDataLocal(abs) : abs
+  }
 
   /** 列表页同步：upsert 商品基础字段（不覆盖详情字段）；isFree 仅用于深链建立的免费商品 */
   upsertFromList(input: {
@@ -165,7 +188,7 @@ export class LibraryRepo {
       fileTotal: counts?.total ?? files.length,
       fileDownloaded: counts?.downloaded ?? 0,
       fileUpdateAvailable: counts?.updates ?? 0,
-      downloadables: files,
+      downloadables: files.map((f) => ({ ...f, localPath: this.downloadLocalOut(f.localPath) })),
       localThumb: null, // 由上层（组装 media URL）填充
       localGallery: [],
       videos: []
@@ -173,13 +196,15 @@ export class LibraryRepo {
   }
 
   listAllDownloadables(limit?: number): Array<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }> {
-    return this.db.all(
+    type Row = { downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }
+    const rows = this.db.all<Row>(
       `SELECT downloadable_id AS downloadableId, item_id AS itemId, filename, variation_id AS variationId,
               status, last_etag AS lastEtag, last_size AS lastSize, local_path AS localPath
        FROM downloadables
        WHERE status != 'missing' AND item_id NOT IN (SELECT item_id FROM items WHERE is_free = 1)
        ORDER BY item_id, downloadable_id ${limit ? 'LIMIT ' + limit : ''}`
     )
+    return rows.map((r) => ({ ...r, localPath: this.downloadLocalOut(r.localPath) }))
   }
 
   /** 标记入队（持久化，重启后恢复） */
@@ -219,19 +244,15 @@ export class LibraryRepo {
       .map((r) => r.downloadable_id)
   }
 
-  /** 文件丢失校验：标记 downloaded 但本地文件已不存在的 → 回到待下载(remote) */
-  validateLocalFiles(localPathExists: (p: string) => boolean): number {
-    const rows = this.db.all<{ downloadable_id: number; local_path: string | null }>(
-      `SELECT downloadable_id, local_path FROM downloadables WHERE status = 'downloaded' AND local_path IS NOT NULL`
+  /**
+   * 本地文件缺失（根目录存在但文件不在）：回到待下载，但保留远端指纹（last_size/last_etag），
+   * 目录恢复后可被重新识别，不会丢失已有信息。
+   */
+  releaseMissingLocal(downloadableId: number): void {
+    this.db.run(
+      `UPDATE downloadables SET status = 'remote', local_path = NULL, local_size = NULL WHERE downloadable_id = ?`,
+      [downloadableId]
     )
-    let fixed = 0
-    for (const r of rows) {
-      if (!localPathExists(r.local_path!)) {
-        this.db.run(`UPDATE downloadables SET status = 'remote', local_path = NULL WHERE downloadable_id = ?`, [r.downloadable_id])
-        fixed++
-      }
-    }
-    return fixed
   }
 
   /** 全文件列表（含最近下载记录状态、队列/活动状态由 DownloadManager 运行时合并） */
@@ -248,7 +269,19 @@ export class LibraryRepo {
     lastError: string | null
     queuedAt: string | null
   }> {
-    return this.db.all(
+    const rows = this.db.all<{
+      downloadableId: number
+      itemId: number
+      itemTitle: string
+      filename: string
+      status: string
+      localPath: string | null
+      localSize: number | null
+      lastSize: number | null
+      failed: number
+      lastError: string | null
+      queuedAt: string | null
+    }>(
       `SELECT d.downloadable_id AS downloadableId, d.item_id AS itemId, i.title AS itemTitle,
               d.filename, d.status, d.local_path AS localPath, d.local_size AS localSize, d.last_size AS lastSize,
               CASE WHEN (SELECT r.status FROM download_records r WHERE r.downloadable_id = d.downloadable_id ORDER BY r.id DESC LIMIT 1) = 'failed' THEN 1 ELSE 0 END AS failed,
@@ -258,6 +291,7 @@ export class LibraryRepo {
        JOIN items i ON i.item_id = d.item_id
        ORDER BY d.item_id DESC, d.downloadable_id`
     )
+    return rows.map((r) => ({ ...r, failed: Number(r.failed) === 1, localPath: this.downloadLocalOut(r.localPath) }))
   }
 
   /** 最近一次下载记录为 failed 的 downloadable（全局重试用） */
@@ -273,21 +307,24 @@ export class LibraryRepo {
   }
 
   listDownloadablesOfItem(itemId: number): Array<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }> {
-    return this.db.all(
+    const rows = this.db.all<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }>(
       `SELECT downloadable_id AS downloadableId, item_id AS itemId, filename, variation_id AS variationId,
               status, last_etag AS lastEtag, last_size AS lastSize, local_path AS localPath
        FROM downloadables WHERE item_id = ? AND status != 'missing' ORDER BY downloadable_id`,
       [itemId]
     )
+    return rows.map((r) => ({ ...r, localPath: this.downloadLocalOut(r.localPath) }))
   }
 
   getDownloadable(downloadableId: number): { downloadableId: number; itemId: number; filename: string; variationId: number | null; status: DownloadableStatus; localPath: string | null; lastEtag: string | null; lastSize: number | null; fallbackUrl: string | null } | undefined {
-    return this.db.get(
+    const r = this.db.get<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: DownloadableStatus; localPath: string | null; lastEtag: string | null; lastSize: number | null; fallbackUrl: string | null }>(
       `SELECT downloadable_id AS downloadableId, item_id AS itemId, filename, variation_id AS variationId,
               status, local_path AS localPath, last_etag AS lastEtag, last_size AS lastSize, fallback_url AS fallbackUrl
        FROM downloadables WHERE downloadable_id = ?`,
       [downloadableId]
     )
+    if (!r) return undefined
+    return { ...r, localPath: this.downloadLocalOut(r.localPath) }
   }
 
   updateFingerprint(downloadableId: number, fp: { etag: string | null; size: number | null; lastModified: string | null; filename?: string }): void {
@@ -299,10 +336,11 @@ export class LibraryRepo {
     )
   }
 
+  /** localPath 为绝对路径，入库时转为相对下载根的存储值 */
   markDownloaded(downloadableId: number, localPath: string, localSize: number): void {
     this.db.run(
       `UPDATE downloadables SET status = 'downloaded', local_path = ?, local_size = ?, last_checked_at = datetime('now') WHERE downloadable_id = ?`,
-      [localPath, localSize, downloadableId]
+      [this.downloadLocalIn(localPath), localSize, downloadableId]
     )
   }
 
@@ -406,12 +444,14 @@ export class LibraryRepo {
   }
 
   listUpdatesAvailable(): Array<Record<string, unknown>> {
-    return this.db.all(
+    const rows = this.db.all<Record<string, unknown> & { localPath: string | null }>(
       `SELECT d.downloadable_id AS downloadableId, d.item_id AS itemId, i.title AS itemTitle, d.filename,
               d.last_size AS lastSize, d.last_etag AS lastEtag, d.local_path AS localPath, d.status
        FROM downloadables d JOIN items i ON i.item_id = d.item_id
        WHERE d.status = 'update_available' ORDER BY d.item_id`
     )
+    return rows.map((r) => ({ ...r, localPath: this.downloadLocalOut(r.localPath) }))
+
   }
 
   setSetting(key: string, value: unknown): void {
@@ -596,16 +636,18 @@ export class LibraryRepo {
   }
 
   listVideosByItem(itemId: number): Array<{ key: string; platform: string; videoId: string; url: string; embedUrl: string; localPath: string | null; status: string }> {
-    return this.db.all(
+    const rows = this.db.all<{ key: string; platform: string; videoId: string; url: string; embedUrl: string; localPath: string | null; status: string }>(
       `SELECT key, platform, video_id AS videoId, url, embed_url AS embedUrl, local_path AS localPath, status FROM item_videos WHERE item_id = ? ORDER BY rowid`,
       [itemId]
     )
+    return rows.map((r) => ({ ...r, localPath: this.dataLocalOut(r.localPath) }))
   }
 
+  /** localPath 为绝对路径，入库时转为相对数据根的存储值 */
   setVideoStatus(key: string, status: string, localPath?: string | null): void {
     this.db.run(`UPDATE item_videos SET status = ?, local_path = COALESCE(?, local_path), updated_at = datetime('now') WHERE key = ?`, [
       status,
-      localPath ?? null,
+      localPath ? this.dataLocalIn(localPath) : null,
       key
     ])
   }

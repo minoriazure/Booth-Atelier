@@ -1,5 +1,6 @@
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'fs'
 import { createHash } from 'crypto'
+import { dirname } from 'path'
 import type { DownloadProgressEvent, DownloadDoneEvent, DownloadSource, Fingerprint, FileListRow, DownloadStats } from '../../shared/types'
 import type { DeeplinkClient } from '../booth/deeplink'
 import type { HttpClient } from '../booth/httpClient'
@@ -492,6 +493,10 @@ export class DownloadManager {
       fp = { etag: null, size: null, lastModified: null, contentType: 'application/zip' }
     }
     const filename = sanitizeFilename(resolved.filename)
+    // 下载根所在磁盘/父目录不存在（如外接盘未挂载）：直接失败，不在别处静默创建目录
+    if (!existsSync(this.paths.rootPath) && !existsSync(dirname(this.paths.rootPath))) {
+      throw new BoothError(`下载目录不可用（所在位置不存在）：${this.paths.rootPath}，请在设置中检查或重新指定下载目录`, 'invalid')
+    }
     this.paths.ensureItemDownloadDirs(job.itemId)
     const finalPath = this.paths.currentFilePath(job.itemId, filename)
     const partPath = finalPath + '.part'
