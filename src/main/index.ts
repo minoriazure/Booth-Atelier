@@ -1,3 +1,4 @@
+import './util/userDataPath'
 import { app, BrowserWindow, protocol, net, shell, dialog } from 'electron'
 import { join, resolve, dirname, extname } from 'path'
 import { existsSync, statSync, createReadStream } from 'fs'

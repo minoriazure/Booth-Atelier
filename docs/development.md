@@ -70,14 +70,15 @@ npx electron .
 
 | 模式 | 数据库与日志 |
 | --- | --- |
-| 便携版 | exe 同级 `data/`，下载根默认 exe 同级 `downloads/` |
-| 开发版（`npm run dev`） | `%APPDATA%\Booth Atelier\` |
+| 便携版 | exe 同级 `data/`（库数据）与 `data/electron/`（Electron userData：日志 `logs/main.log`、缓存、单实例锁），下载根默认 exe 同级 `downloads/` |
+| 开发版（`npm run dev`，未设置 `PORTABLE_EXECUTABLE_DIR`） | 仓库内 `.temp\electron\`（库数据与 userData 同目录；可用 `BOOTH_DATA_DIR` 覆盖） |
 
-日志位于 `%APPDATA%\Booth Atelier\logs\main.log`（便携版与开发版共用）。
+开发版日志位于 `.temp\electron\logs\main.log`，便携版日志位于 exe 同级 `data\electron\logs\main.log`。
 
 ## 注意事项
 
-- Electron `userData` 当前为 `%APPDATA%\Booth Atelier\`，由 `productName` 决定。仅修改 npm 包名或 `appId` 不会改变此路径；现有设置和用户数据继续使用，不会迁移或删除。系统中若有其他历史数据目录，本程序不会自动导入或清理。
+- Electron `userData` 由 `src/main/util/userDataPath.ts` 在启动最早处重定向：设置 `PORTABLE_EXECUTABLE_DIR` 时到 `data\electron\`，未打包的开发运行到 `.temp\electron\`。该模块必须是 `src/main/index.ts` 的第一个 import。
+- 未打包运行时 userData 目录名来自 `package.json` 顶层 `name`（`booth-atelier`）。
 - `appId` 是 Windows 应用/安装包身份，本项目当前发布的是便携版；未来如启用安装版，修改 `appId` 后须验证原位升级、快捷方式和卸载行为。
 - BOOTH 当前 deeplink 依赖固定 scheme `booth-library-manager://` 与 `client=booth-library-manager`，这两个外部兼容标识不随产品品牌更名。
 - 数据库使用 sql.js（WASM），不依赖需要本地编译的原生模块（如 better-sqlite3），因此打包时无需 Visual Studio。

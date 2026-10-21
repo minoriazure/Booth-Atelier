@@ -2,6 +2,12 @@
 
 本文件记录项目的主要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 变更
+
+- 便携版的 Electron `userData`（日志、Chromium 缓存、单实例锁等运行时状态）从 `%APPDATA%` 迁移到 exe 同级 `data\electron\`，实现完全 portable。开发运行迁移到仓库内 `.temp\electron\`。
+
 ## [1.2.0] - 2026-10-20
 
 ### 新增
