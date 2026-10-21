@@ -91,7 +91,7 @@ GET https://booth.pm/downloadables/{id}/deeplink?client=booth-library-manager&va
 ## 凭据安全模型
 
 - Cookie 文件是唯一的登录凭证来源，程序只在内存中持有解析后的 Cookie。
-- 登录判定：`AuthChecker` 请求 `accounts.booth.pm/library?page=1`，若被重定向到 `/login`、返回 401，或页面标题不是 `Library - BOOTH`，则判定为失效。
+- 登录判定：`AuthChecker` 请求 `accounts.booth.pm/library?page=1`，若被重定向到 `/login`、返回 401，或页面标题不在库页白名单内（`Library - BOOTH` / 日语界面的 `ライブラリ - BOOTH`），则判定为失效。标题随界面语言变化，因此不能只比对英文标题。
 - 热加载：监听 Cookie 文件所在的父目录（按文件名过滤），因此文件缺失后再补放、覆盖或删除都能被感知。每次发送请求前还会通过 mtime 做惰性核对作为兜底。文件变化后发出 `cookiesReloaded` 事件，渲染进程自动重新检查登录状态。
 - Cookie 路径为纯覆盖项：设置了且存在则生效，否则回退到默认查找链（exe 同级优先）。
 

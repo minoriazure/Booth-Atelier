@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio'
 import { BoothError } from './errors'
 import { sniffAuthFailure, type HttpClient } from './httpClient'
+import { isLibraryPageHtml } from './auth'
 import type { DownloadableRef, LibraryItem } from '../../shared/types'
 
 /**
@@ -47,8 +48,8 @@ export class LibraryCrawler {
     const text = await res.text()
     const err = sniffAuthFailure(res.status, res.url, text.slice(0, 2000))
     if (err) throw err
-    if (!/<title>Library - BOOTH/.test(text)) {
-      // 登录页 title 为 BOOTH 登录相关，或其它异常
+    if (!isLibraryPageHtml(text)) {
+      // 登录页 title 为 BOOTH 登录相关（Sign in / ログイン），或其它异常
       if (/login|sign_in|ログイン/i.test(res.url) || /<title>[^<]*ログイン|Log in/i.test(text)) {
         throw new BoothError('cookies 过期，页面跳转到登录', 'auth', res.status)
       }
