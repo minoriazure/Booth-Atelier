@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-- Electron 33 + TypeScript + React 18
+- Electron 45 + TypeScript + React 18
 - sql.js（WASM）作为 SQLite 实现
 - electron-vite 构建
 - 便携版：`electron-builder --dir` 加自研 NSIS 启动器 stub
