@@ -184,6 +184,14 @@ export interface Settings {
   lastGlobalCheckAt: string | null
 }
 
+/** 代理连通性测试结果（访问 BOOTH 首页） */
+export interface ProxyTestResult {
+  ok: boolean
+  status: number | null
+  latencyMs: number
+  message: string
+}
+
 /** 描述中的内嵌视频 */
 export type VideoPlatform = 'youtube' | 'nicovideo' | 'vimeo' | 'other'
 

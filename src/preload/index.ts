@@ -16,7 +16,8 @@ import type {
   SnapshotEntry,
   ItemVideo,
   ImageProgress,
-  DeepLinkHostPrompt
+  DeepLinkHostPrompt,
+  ProxyTestResult
 } from '../shared/types'
 
 export interface VideoProgressEvent {
@@ -32,6 +33,7 @@ export interface BoothAPI {
   settings: {
     get(): Promise<Settings>
     set(patch: Partial<Settings>): Promise<Settings>
+    test(): Promise<ProxyTestResult>
   }
   library: {
     list(q?: string): Promise<ItemSummary[]>
@@ -106,6 +108,8 @@ export interface BoothAPI {
   system: {
     /** 系统代理状态（如 "HTTP 127.0.0.1:7890" / "DIRECT"），下载会自动遵循 */
     proxyInfo(): Promise<string | null>
+    /** Windows 系统代理地址（未开启或仅 PAC 时为 null），用于自定义代理的默认填充 */
+    windowsProxy(): Promise<string | null>
   }
   events: {
     onLibraryUpdated(cb: (summary: CheckSummary) => void): () => void
@@ -133,7 +137,8 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 const api: BoothAPI = {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
-    set: (patch) => ipcRenderer.invoke('settings:set', patch)
+    set: (patch) => ipcRenderer.invoke('settings:set', patch),
+    test: () => ipcRenderer.invoke('settings:test')
   },
   library: {
     list: (q) => ipcRenderer.invoke('library:list', q),
@@ -196,7 +201,8 @@ const api: BoothAPI = {
     hostDecision: (decision) => ipcRenderer.invoke('protocol:hostDecision', decision)
   },
   system: {
-    proxyInfo: () => ipcRenderer.invoke('system:proxyInfo')
+    proxyInfo: () => ipcRenderer.invoke('system:proxyInfo'),
+    windowsProxy: () => ipcRenderer.invoke('system:windowsProxy')
   },
   events: {
     onLibraryUpdated: (cb) => subscribe('event:libraryUpdated', cb),

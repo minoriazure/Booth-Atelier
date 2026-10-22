@@ -16,6 +16,7 @@
  *   system 模式与 Chrome 一样读取并监听 Windows WinINET 注册表（ProxyEnable/ProxyServer）。
  * - Node 脚本环境（tsx 验证脚本）回退全局 fetch（不读系统代理，仅测试用）。
  */
+import { execFile } from 'child_process'
 import { createLogger } from '../util/log'
 import type { Settings } from '../../shared/types'
 
@@ -293,9 +294,47 @@ export function normalizeProxyRules(input: string): string | null {
   return null
 }
 
+const WININET_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
+
+function readRegValue(name: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('reg', ['query', WININET_KEY, '/v', name], { windowsHide: true, timeout: 5000 }, (err, stdout) => {
+      if (err) return resolve(null)
+      const m = stdout.match(new RegExp(`${name}\\s+REG_\\w+\\s+(.+)`))
+      resolve(m ? m[1].trim() : null)
+    })
+  })
+}
+
+/**
+ * 读取 Windows 系统代理（WinINET 注册表，与 Chrome 系统模式同源），转为 customProxy 可用的地址。
+ * 系统代理未开启、或仅配置 PAC 脚本时返回 null（无法固定为单一地址）。
+ */
+export async function readWindowsSystemProxy(): Promise<string | null> {
+  if (process.platform !== 'win32') return null
+  const enabled = await readRegValue('ProxyEnable')
+  if (enabled === null || Number(enabled) !== 1) return null
+  const server = await readRegValue('ProxyServer')
+  if (!server) return null
+  if (!server.includes('=')) return normalizeProxyRules(`http://${server}`)
+  // 按协议区分的格式：http=host:port;https=host:port;socks=host:port
+  const entries = new Map(
+    server
+      .split(';')
+      .map((part) => part.split('=').map((x) => x.trim()))
+      .filter((p) => p.length === 2 && p[1])
+      .map(([k, v]) => [k.toLowerCase(), v] as const)
+  )
+  const http = entries.get('http') ?? entries.get('https')
+  if (http) return normalizeProxyRules(`http://${http}`)
+  const socks = entries.get('socks')
+  return socks ? normalizeProxyRules(`socks5://${socks}`) : null
+}
+
 /**
  * 应用代理设置（运行时热切换，无需重启）。
  * 同时应用到 booth 内存 session（实际出口）与 defaultSession（renderer 兜底，保持行为一致）。
+ * custom 地址为空时跟随系统代理（system 模式；系统代理未开启则等同直连）。
  * 返回是否成功应用；custom 格式非法时回退 system 并返回 false。
  */
 export async function applyProxySettings(mode: ProxyMode, customProxy: string): Promise<boolean> {
@@ -309,7 +348,10 @@ export async function applyProxySettings(mode: ProxyMode, customProxy: string): 
 
     let cfg: { mode: string; proxyRules?: string }
     let ok = true
-    if (mode === 'custom') {
+    if (mode === 'custom' && customProxy.trim() === '') {
+      cfg = { mode: 'system' }
+      log.info('proxy → custom 地址为空，跟随系统代理')
+    } else if (mode === 'custom') {
       const rules = normalizeProxyRules(customProxy)
       if (rules) {
         cfg = { mode: 'fixed_servers', proxyRules: rules }

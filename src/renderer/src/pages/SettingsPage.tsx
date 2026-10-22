@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Settings } from '../../../shared/types'
+import type { Settings, ProxyTestResult } from '../../../shared/types'
 import { api } from '../api'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
@@ -19,6 +19,10 @@ export default function SettingsPage({
   const [saving, setSaving] = useState(false)
   const [proxyInfo, setProxyInfo] = useState<string | null>(null)
   const [customProxyInput, setCustomProxyInput] = useState(settings.customProxy)
+  /** 代理模式草稿：选「自定义」后需保存地址才会生效，系统/直连选中即生效 */
+  const [draftMode, setDraftMode] = useState<Settings['proxyMode']>(settings.proxyMode)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<ProxyTestResult | null>(null)
   /** Cookie 路径输入框草稿；初始/同步自「当前生效路径」（无覆盖时 = 默认链路径） */
   const [cookiesPathInput, setCookiesPathInput] = useState(settings.cookiesPath)
   /** 「未改动」基准 = 当前生效路径（jar 实际指向），用于区分「仅检测」与「应用并检测」 */
@@ -42,6 +46,11 @@ export default function SettingsPage({
     refreshCookiesDisplay()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    setDraftMode(settings.proxyMode)
+    setCustomProxyInput(settings.customProxy)
+  }, [settings.proxyMode, settings.customProxy])
 
   const patch = async (p: Partial<Settings>): Promise<boolean> => {
     setSaving(true)
@@ -79,14 +88,44 @@ export default function SettingsPage({
     })
   }
 
-  const saveCustomProxy = (): void => {
-    const v = customProxyInput.trim()
-    if (v === settings.customProxy) return
-    if (v && !isValidProxyAddr(v)) {
-      toast('error', '代理地址格式无效（示例：http://127.0.0.1:7890、socks5://127.0.0.1:1080、127.0.0.1:7890）')
-      return
+  const customTrimmed = customProxyInput.trim()
+  const customInvalid = draftMode === 'custom' && customTrimmed !== '' && !isValidProxyAddr(customTrimmed)
+  const proxyDirty =
+    draftMode === 'custom' && (settings.proxyMode !== 'custom' || customTrimmed !== settings.customProxy)
+
+  /** 自定义输入为空时，用 Windows 系统代理预填（仅填入输入框，需点保存才生效） */
+  const fillFromSystem = (): void => {
+    void api.system.windowsProxy().then((p) => {
+      if (p) setCustomProxyInput((cur) => (cur.trim() ? cur : p))
+    })
+  }
+
+  const pickProxyMode = (mode: Settings['proxyMode']): void => {
+    setDraftMode(mode)
+    if (mode !== 'custom') {
+      void patch({ proxyMode: mode })
+    } else if (!customProxyInput.trim()) {
+      fillFromSystem()
     }
-    void patch({ customProxy: v })
+  }
+
+  const saveCustomProxy = (): void => {
+    if (customInvalid || !proxyDirty) return
+    void patch({ proxyMode: 'custom', customProxy: customTrimmed }).then((ok) => {
+      if (ok) setTestResult(null)
+    })
+  }
+
+  const testProxy = async (): Promise<void> => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      setTestResult(await api.settings.test())
+    } catch (e) {
+      setTestResult({ ok: false, status: null, latencyMs: 0, message: `测试失败：${e instanceof Error ? e.message : e}` })
+    } finally {
+      setTesting(false)
+    }
   }
 
   return (
@@ -147,44 +186,70 @@ export default function SettingsPage({
           </div>
         </div>
         <div className="setting-row">
+          <div />
+          <div className="value">
+            <span className="hint">
+              Cookie 过期时用浏览器插件重新导出并覆盖上述文件即可，程序会自动热加载。目录结构：
+              <code> {"{下载根目录}/{商品编号}/files/current|history/{日期}}"} </code>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h3>网络代理</h3>
+        <div className="setting-row">
           <div className="label">代理模式</div>
           <div className="value">
             <button
-              className={settings.proxyMode === 'system' ? 'primary' : ''}
-              onClick={() => void patch({ proxyMode: 'system' })}
+              className={draftMode === 'system' ? 'primary' : ''}
+              onClick={() => pickProxyMode('system')}
               title="跟随 Windows 系统代理（与 Chrome 相同），系统里改了自动生效"
             >
               🌐 系统代理
             </button>
             <button
-              className={settings.proxyMode === 'custom' ? 'primary' : ''}
-              onClick={() => void patch({ proxyMode: 'custom' })}
+              className={draftMode === 'custom' ? 'primary' : ''}
+              onClick={() => pickProxyMode('custom')}
               title="手动指定代理地址，不依赖系统设置"
             >
               ⚙ 自定义
             </button>
             <button
-              className={settings.proxyMode === 'direct' ? 'primary' : ''}
-              onClick={() => void patch({ proxyMode: 'direct' })}
+              className={draftMode === 'direct' ? 'primary' : ''}
+              onClick={() => pickProxyMode('direct')}
               title="不使用任何代理，直连 BOOTH"
             >
               ⛔ 直连
             </button>
-            {settings.proxyMode === 'custom' && (
+          </div>
+        </div>
+        {draftMode === 'custom' && (
+          <div className="setting-row">
+            <div className="label">代理地址</div>
+            <div className="value">
               <input
                 type="text"
-                style={{ width: 250 }}
+                style={{ width: 300 }}
+                className={customInvalid ? 'invalid' : ''}
                 value={customProxyInput}
-                placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+                placeholder="留空则跟随系统代理，如 http://127.0.0.1:7890"
                 onChange={(e) => setCustomProxyInput(e.target.value)}
-                onBlur={saveCustomProxy}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') saveCustomProxy()
                 }}
               />
-            )}
+              <button className="primary" disabled={!proxyDirty || customInvalid || saving} onClick={saveCustomProxy}>
+                {saving ? '保存中…' : '保存代理设置'}
+              </button>
+              <span className={customInvalid ? 'hint error-text' : 'hint'}>
+                {customInvalid
+                  ? '地址格式无效，支持 http / https / socks4 / socks5 协议，或裸 host:port'
+                  : '留空保存时跟随系统代理；系统代理未开启则直连'}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
         <div className="setting-row">
           <div className="label">当前生效代理</div>
           <div className="value">
@@ -192,21 +257,34 @@ export default function SettingsPage({
               {proxyInfo ?? '未检测到'}
             </span>
             <button onClick={refreshProxy}>刷新</button>
-            <span className="hint">
-              {settings.proxyMode === 'system'
-                ? '跟随 Windows 系统代理设置（与 Chrome 相同，系统里修改后自动生效，无需重启）'
-                : settings.proxyMode === 'custom'
-                  ? '使用上方自定义地址；切换后立即生效，无需重启'
-                  : '不使用代理，直连 BOOTH（切换后立即生效，无需重启）'}
-            </span>
+            <button
+              disabled={proxyDirty || testing}
+              onClick={() => void testProxy()}
+              title={proxyDirty ? '请先保存代理设置后再测试' : '访问 BOOTH 首页检测当前代理是否可用'}
+            >
+              {testing ? '测试中…' : '测试连接'}
+            </button>
           </div>
         </div>
+        {testResult && (
+          <div className="setting-row">
+            <div />
+            <div className="value">
+              <span className={testResult.ok ? 'test-ok' : 'test-fail'}>{testResult.message}</span>
+            </div>
+          </div>
+        )}
         <div className="setting-row">
           <div />
           <div className="value">
             <span className="hint">
-              Cookie 过期时用浏览器插件重新导出并覆盖上述文件即可，程序会自动热加载。目录结构：
-              <code> {"{下载根目录}/{商品编号}/files/current|history/{日期}}"} </code>
+              {proxyDirty
+                ? '代理地址尚未保存，保存后生效'
+                : draftMode === 'system'
+                  ? '跟随 Windows 系统代理设置（系统里修改后自动生效，无需重启）'
+                  : draftMode === 'custom'
+                    ? '使用上方自定义地址；保存后立即生效，无需重启'
+                    : '不使用代理，直连 BOOTH（切换后立即生效，无需重启）'}
             </span>
           </div>
         </div>

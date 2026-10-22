@@ -3,9 +3,10 @@ import { existsSync } from 'fs'
 import { z } from 'zod'
 import type { AppContext } from '../appContext'
 import { isAuthError } from '../booth/errors'
-import { applyProxySettings, resolveSystemProxy } from '../booth/systemFetch'
+import { applyProxySettings, normalizeProxyRules, readWindowsSystemProxy, resolveSystemProxy, systemFetch } from '../booth/systemFetch'
 import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
+import type { ProxyTestResult } from '../../shared/types'
 
 const log = createLogger('ipc')
 
@@ -48,6 +49,14 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     const p = z.record(z.unknown()).parse(patch) as Record<string, unknown>
     if (p.proxyMode !== undefined && !['system', 'custom', 'direct'].includes(String(p.proxyMode))) {
       throw new Error(`无效的代理模式: ${String(p.proxyMode)}`)
+    }
+    if (p.customProxy !== undefined) {
+      const effectiveMode = p.proxyMode ?? ctx.settings.get().proxyMode
+      const v = String(p.customProxy ?? '').trim()
+      p.customProxy = v
+      if (effectiveMode === 'custom' && v && !normalizeProxyRules(v)) {
+        throw new Error('自定义代理地址无效，请输入例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080')
+      }
     }
     if (p.autoRegisterDeepLink !== undefined && typeof p.autoRegisterDeepLink !== 'boolean') {
       throw new Error('autoRegisterDeepLink 必须是布尔值')
@@ -234,6 +243,30 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   // ── 系统代理状态（设置页展示；下载实际走 Chromium 栈自动应用） ──
   handle('system:proxyInfo', async () => {
     return resolveSystemProxy()
+  })
+  handle('system:windowsProxy', () => readWindowsSystemProxy())
+
+  // ── 代理连通性测试（经当前生效代理访问 BOOTH 首页） ──
+  handle('settings:test', async (): Promise<ProxyTestResult> => {
+    const started = Date.now()
+    try {
+      const res = await systemFetch('https://booth.pm/', {
+        method: 'GET',
+        signal: AbortSignal.timeout(15_000)
+      })
+      void res.body?.cancel().catch(() => undefined)
+      const latencyMs = Date.now() - started
+      const ok = res.status >= 200 && res.status < 400
+      return {
+        ok,
+        status: res.status,
+        latencyMs,
+        message: ok ? `连接成功（HTTP ${res.status}，${latencyMs} ms）` : `BOOTH 返回 HTTP ${res.status}`
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, status: null, latencyMs: Date.now() - started, message: `连接失败：${message}` }
+    }
   })
 
   // ── dialog ──

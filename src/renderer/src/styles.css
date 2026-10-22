@@ -525,6 +525,23 @@ select {
   font-size: 12px;
   line-height: 1.6;
 }
+.setting-row .hint.error-text {
+  color: var(--error);
+}
+.test-ok,
+.test-fail {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.test-ok {
+  color: #38c793;
+}
+.test-fail {
+  color: var(--error);
+}
+input.invalid {
+  border-color: var(--error);
+}
 .path-text {
   font-family: Consolas, monospace;
   font-size: 12px;
