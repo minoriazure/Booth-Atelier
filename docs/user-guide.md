@@ -18,7 +18,7 @@
 4. 所有工作文件（数据库 `data/`、素材 `downloads/`、cookies）默认都在 **exe 同级目录**，整个文件夹拷走即可使用。下载根目录可在「设置」中改到任意盘。
 
 > [!TIP]
-> 便携模式下数据不依赖 `%APPDATA%`。程序文件缓存在 exe 同级 `app-cache\`，随文件夹一起拷贝即可在新机器上免二次解压。Electron 的运行时状态（日志 `data\electron\logs\main.log`、Chromium 缓存、单实例锁）也位于 `data\electron\`。运行 `BoothAtelier-x.y.z-portable.exe /purge` 只清除 `app-cache\`，数据不受影响。
+> 便携模式下数据不依赖 `%APPDATA%`。程序文件缓存在 exe 同级 `app-cache\`，随文件夹一起拷贝即可在新机器上免二次解压。应用日志位于 `data\log\`，每天一个文件（`YYYY-MM-DD.log`），保留天数在「设置 → 日志保留天数」中配置（7–180，默认 60）；「日志」页可浏览、按日期定位和搜索。Electron 的运行时状态（Chromium 缓存、单实例锁）位于 `data\electron\`。运行 `BoothAtelier-x.y.z-portable.exe /purge` 只清除 `app-cache\`，数据不受影响。
 
 ## Cookie 获取
 

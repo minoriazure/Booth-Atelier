@@ -97,6 +97,7 @@ export class VideoService {
       const error = '未检测到 yt-dlp，请安装并加入 PATH（pip install yt-dlp）'
       this.repo.setVideoStatus(key, 'failed')
       this.onProgress?.({ key, itemId: v ? this.findItemOfVideo(key) : 0, progress: 0, status: 'failed', error })
+      log.warn(`video failed (yt-dlp missing): ${key}`)
       return { ok: false, error }
     }
 
@@ -156,6 +157,7 @@ export class VideoService {
         this.active.delete(key)
         this.repo.setVideoStatus(key, 'failed')
         this.onProgress?.({ key, itemId: itemId2, progress: 0, status: 'failed', error: err.message })
+        log.warn(`video failed (spawn): ${key}: ${err.message}`)
         resolve({ ok: false, error: err.message })
       })
 
@@ -165,6 +167,7 @@ export class VideoService {
           const error = stderrTail.split('\n').filter(Boolean).pop() || `yt-dlp 退出码 ${code}`
           this.repo.setVideoStatus(key, 'failed')
           this.onProgress?.({ key, itemId: itemId2, progress: 0, status: 'failed', error })
+          log.warn(`video failed (exit ${code}): ${key}: ${error}`)
           resolve({ ok: false, error })
           return
         }
@@ -173,6 +176,7 @@ export class VideoService {
         if (!file) {
           this.repo.setVideoStatus(key, 'failed')
           this.onProgress?.({ key, itemId: itemId2, progress: 0, status: 'failed', error: '下载完成但未找到输出文件' })
+          log.warn(`video failed (no output file): ${key}`)
           resolve({ ok: false, error: '未找到输出文件' })
           return
         }

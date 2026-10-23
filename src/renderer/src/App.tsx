@@ -6,10 +6,11 @@ import ItemDetailPage from './pages/ItemDetailPage'
 import UpdatesPage from './pages/UpdatesPage'
 import HistoryPage, { type HistoryFocus } from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
+import LogPage from './pages/LogPage'
 import AuthExpiredDialog from './components/AuthExpiredDialog'
 import DeepLinkHostDialog from './components/DeepLinkHostDialog'
 
-type Tab = 'library' | 'updates' | 'history' | 'settings'
+type Tab = 'library' | 'updates' | 'history' | 'settings' | 'log'
 
 interface Toast {
   id: number
@@ -21,7 +22,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>(() => {
     const m = /tab=(\w+)/.exec(window.location.hash)
     const t = m?.[1]
-    return t === 'updates' || t === 'history' || t === 'settings' ? t : 'library'
+    return t === 'updates' || t === 'history' || t === 'settings' || t === 'log' ? t : 'library'
   })
   const [detailId, setDetailId] = useState<number | null>(() => {
     const m = /item=(\d+)/.exec(window.location.hash)
@@ -43,6 +44,7 @@ export default function App() {
     const id = Date.now() + Math.random()
     setToasts((t) => [...t, { id, level, message }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000)
+    void api.log.write(level, 'toast', message).catch(() => {})
   }, [])
 
   /** 统一处理 auth.check 结果：限流只提示（不弹 Cookie 弹窗），真失效才置红 */
@@ -265,6 +267,9 @@ export default function App() {
         <button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>
           设置
         </button>
+        <button className={tab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>
+          日志
+        </button>
       </div>
 
       <div className="main">
@@ -291,6 +296,7 @@ export default function App() {
             onAuthCheck={() => void runAuthCheck()}
           />
         )}
+        {tab === 'log' && <LogPage />}
       </div>
 
       <div className="statusbar-stack">

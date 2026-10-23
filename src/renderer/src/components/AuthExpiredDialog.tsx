@@ -14,11 +14,17 @@ export default function AuthExpiredDialog({
 }) {
   const [path, setPath] = useState('')
   useEffect(() => {
+    void api.log.write('warn', 'dialog', `auth expired dialog shown: ${message ?? ''}`).catch(() => {})
     void api.auth.cookiesPath().then(setPath)
   }, [])
 
+  const close = () => {
+    void api.log.write('info', 'dialog', 'auth expired dialog closed by user').catch(() => {})
+    onClose()
+  }
+
   return (
-    <div className="modal-mask" onClick={onClose}>
+    <div className="modal-mask" onClick={close}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>🔑 Cookie 已失效</h2>
         <p>{message || 'BOOTH 登录状态已过期，部分操作无法继续。'}</p>
@@ -29,7 +35,7 @@ export default function AuthExpiredDialog({
         </p>
         <p>把文件放回该路径即可，程序会自动识别并恢复登录状态，无需任何操作。</p>
         <div className="buttons">
-          <button className="primary" onClick={onClose}>
+          <button className="primary" onClick={close}>
             确定
           </button>
         </div>

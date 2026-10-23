@@ -32,16 +32,23 @@ export class UpdateCheckService {
 
   async checkGlobal(): Promise<CheckSummary> {
     const targets = this.repo.listAllDownloadables()
-    return this.checkMany(targets, '全局')
+    log.info(`global file check start: ${targets.length} link(s)`)
+    const s = await this.checkMany(targets, '全局')
+    log.info(`global file check done: ${JSON.stringify(s)}`)
+    return s
   }
 
   async checkItem(itemId: number): Promise<CheckSummary> {
     // 免费商品不参与文件更新检查（作者限定免费，下载后即收费，不会进入用户库）
     if (this.repo.isFreeItem(itemId)) {
+      log.info(`item ${itemId} check skipped: free item`)
       return { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
     }
     const targets = this.repo.listDownloadablesOfItem(itemId)
-    return this.checkMany(targets, `商品 ${itemId}`)
+    log.info(`item ${itemId} file check start: ${targets.length} link(s)`)
+    const s = await this.checkMany(targets, `商品 ${itemId}`)
+    log.info(`item ${itemId} file check done: ${JSON.stringify(s)}`)
+    return s
   }
 
   private async checkMany(

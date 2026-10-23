@@ -39,6 +39,7 @@ export class LibrarySyncService {
   async sync(forceDetail = false): Promise<CheckSummary> {
     if (this.running) throw new Error('同步已在进行中')
     this.running = true
+    log.info(`library sync start (forceDetail=${forceDetail})`)
     const summary: CheckSummary = { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
     try {
       // 1) 列表页
@@ -137,6 +138,7 @@ export class LibrarySyncService {
       this.images.requeuePending()
 
       this.repo.setSetting('lastLibrarySyncAt', new Date().toISOString())
+      log.info(`library sync done: ${JSON.stringify(summary)}`)
       return summary
     } finally {
       this.running = false

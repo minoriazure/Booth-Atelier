@@ -6,6 +6,7 @@ import { isAuthError } from '../booth/errors'
 import { applyProxySettings, normalizeProxyRules, readWindowsSystemProxy, resolveSystemProxy, systemFetch } from '../booth/systemFetch'
 import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
+import { listDays, readDay, searchLogs, cleanupLogs } from '../services/logService'
 import type { ProxyTestResult } from '../../shared/types'
 
 const log = createLogger('ipc')
@@ -84,7 +85,17 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
       p.cookiesPath = v
       if (v && !existsSync(v)) throw new Error(`Cookie 文件不存在: ${v}`)
     }
+    if ('logRetentionDays' in p) {
+      const v = Number(p.logRetentionDays)
+      if (!Number.isInteger(v) || v < 7 || v > 180) throw new Error('日志保留天数必须是 7–180 之间的整数')
+      p.logRetentionDays = v
+    }
     const next = ctx.settings.set(p as never)
+    log.info(`settings saved: ${Object.keys(p).join(', ') || '(none)'}`)
+    if ('logRetentionDays' in p) {
+      log.info(`log retention changed to ${next.logRetentionDays} day(s)`)
+      void cleanupLogs(next.logRetentionDays)
+    }
     // 代理设置变更：立即热应用（无需重启），随后 UI 刷新 proxyInfo 即可看到新值
     if ('proxyMode' in p || 'customProxy' in p) {
       await applyProxySettings(next.proxyMode, next.customProxy)
@@ -101,6 +112,21 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     }
     return next
   })
+  // ── log ──
+  handle('log:listDays', () => listDays())
+  handle('log:readDay', (date: unknown, offset: unknown, limit: unknown) =>
+    readDay(q.parse(date), z.number().int().min(0).parse(offset), z.number().int().min(1).max(1000).parse(limit))
+  )
+  handle('log:search', (query: unknown) => searchLogs(q.max(200).parse(query)))
+  const rendererLog = createLogger('renderer')
+  /** 渲染层日志（toast / 错误边界等）写入同一套日志文件 */
+  handle('log:write', (level: unknown, scope: unknown, message: unknown) => {
+    const lv = z.enum(['info', 'warn', 'error']).parse(level)
+    const sc = q.max(64).parse(scope)
+    const msg = q.max(4000).parse(message)
+    rendererLog[lv](`[${sc}] ${msg}`)
+  })
+
   const withLocalThumbs = <T extends { itemId: number; thumbnailUrl: string | null }>(
     rows: T[]
   ): Array<T & { localThumb: string | null }> =>
@@ -295,14 +321,18 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
       properties: ['openDirectory', 'createDirectory'],
       title: '选择下载根目录'
     })
-    return r.canceled ? null : r.filePaths[0] ?? null
+    const picked = r.canceled ? null : r.filePaths[0] ?? null
+    log.info(`choose download dir: ${picked ?? '(cancelled)'}`)
+    return picked
   })
   handle('dialog:chooseFile', async () => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
       title: '选择 Cookie 文件（Netscape 格式）'
     })
-    return r.canceled ? null : r.filePaths[0] ?? null
+    const picked = r.canceled ? null : r.filePaths[0] ?? null
+    log.info(`choose cookie file: ${picked ?? '(cancelled)'}`)
+    return picked
   })
 
   // ── protocol（深链宿主自检：应用内弹窗，独立于 cookies）──

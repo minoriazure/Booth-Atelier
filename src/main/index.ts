@@ -5,7 +5,9 @@ import { existsSync, statSync, createReadStream } from 'fs'
 import { createAppContext, type AppContext } from './appContext'
 import { registerIpc } from './ipc/handlers'
 import { findProtocolArg, handleProtocolUrl, focusMainWindow, BOOTH_PROTOCOL } from './protocol'
-import { createLogger } from './util/log'
+import { createLogger, onLogWritten } from './util/log'
+import { resolveDataDir } from './util/dataDir'
+import { cleanupLogs } from './services/logService'
 
 const log = createLogger('main')
 
@@ -185,6 +187,13 @@ if (!gotLock) {
     }
   })
 
+  process.on('uncaughtException', (e) => {
+    log.error('uncaught exception:', e instanceof Error ? (e.stack ?? e.message) : String(e))
+  })
+  process.on('unhandledRejection', (e) => {
+    log.error('unhandled rejection:', e instanceof Error ? (e.stack ?? e.message) : String(e))
+  })
+
   app.whenReady().then(async () => {
     try {
       await bootApp()
@@ -197,6 +206,7 @@ if (!gotLock) {
       } catch {
         /* ignore */
       }
+      log.error('showing boot error dialog')
       dialog.showErrorBox('启动失败', `应用初始化失败：\n${msg}`)
       app.quit()
     }
@@ -222,8 +232,7 @@ if (!gotLock) {
     // 非 portable（dev / 安装版）：沿用 userData。
     const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
     const exeDir = portableDir ?? dirname(app.getPath('exe'))
-    const dataDir =
-      process.env.BOOTH_DATA_DIR || (portableDir ? resolve(portableDir, 'data') : app.getPath('userData'))
+    const dataDir = resolveDataDir()
     const cookiesPath = resolveDefaultCookiesPath()
     // 默认下载根：portable → exe 同级 downloads/；否则 dataDir/downloads
     const defaultRoot = portableDir ? resolve(portableDir, 'downloads') : join(dataDir, 'downloads')
@@ -244,6 +253,9 @@ if (!gotLock) {
       })
       throw e
     }
+
+    void cleanupLogs(ctx.settings.get().logRetentionDays)
+    log.info(`app started v${app.getVersion()} portable=${!!portableDir} dataDir=${dataDir}`)
 
     ctx.jar.watch(() => {
       // jar 内容真实变化（补放/覆盖/删除）→ 通知 renderer 自动重查登录状态并刷新右上角状态
@@ -396,6 +408,15 @@ if (!gotLock) {
     }
     ctx.startup.onProgress = (e) => emit('event:checkProgress', e)
     ctx.startup.onAuthExpired = (msg) => emit('event:authExpired', msg)
+    // 日志实时推送：合并 300ms 内的多次写入，避免日志密集时频繁刷新
+    let logPushTimer: NodeJS.Timeout | null = null
+    onLogWritten(() => {
+      if (logPushTimer) return
+      logPushTimer = setTimeout(() => {
+        logPushTimer = null
+        emit('event:logAppended', undefined)
+      }, 300)
+    })
     // 测试辅助：BOOTH_NO_STARTUP=1 跳过启动同步/检查（截图验证 UI 用）
     if (process.env.BOOTH_NO_STARTUP) {
       log.info('BOOTH_NO_STARTUP set, skip startup sync')
@@ -426,6 +447,7 @@ if (!gotLock) {
   })
 
   app.on('before-quit', () => {
+    log.info('app quitting')
     ctx?.dispose()
   })
 }

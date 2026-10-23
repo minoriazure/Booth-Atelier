@@ -205,11 +205,13 @@ export class DownloadManager {
         status: 'cancelled'
       })
       this.onQueueChanged?.()
+      log.info(`cancelled queued: #${downloadableId}`)
       return true
     }
     const act = this.active.get(downloadableId)
     if (act) {
       act.abort.abort()
+      log.info(`cancel requested for active download: #${downloadableId}`)
       return true
     }
     return false

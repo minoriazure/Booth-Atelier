@@ -163,6 +163,8 @@ export interface Settings {
   cookiesPath: string
   /** 启动时检查 booth-library-manager:// 深链注册是否指向本程序，指向其它副本时询问是否注册 */
   autoRegisterDeepLink: boolean
+  /** 日志保留天数（含当天），范围 7–180，默认 60；超出的日志文件启动时与修改设置后自动删除 */
+  logRetentionDays: number
   /** 启动时自动同步商品库（元数据/简介/宣传图） */
   autoSyncLibraryOnStartup: boolean
   /** 启动时自动检查文件更新 */
@@ -185,6 +187,37 @@ export interface Settings {
 }
 
 /** 代理连通性测试结果（访问 BOOTH 首页） */
+/** 日志文件（每天一个）的元信息 */
+export interface LogDayInfo {
+  /** YYYY-MM-DD */
+  date: string
+  /** 当天行数（每条日志一行，等于换行符数） */
+  lines: number
+}
+
+/** 某天日志的一段（row 0 = 当天最后一行，即最新在前） */
+export interface LogPageResult {
+  date: string
+  /** 当天总行数 */
+  total: number
+  /** 本段起始 row */
+  offset: number
+  lines: string[]
+}
+
+export interface LogSearchHit {
+  date: string
+  /** 该天内的显示行号（与 readDay 的 row 一致） */
+  row: number
+  text: string
+}
+
+export interface LogSearchResult {
+  hits: LogSearchHit[]
+  /** 命中数超过上限被截断 */
+  truncated: boolean
+}
+
 export interface ProxyTestResult {
   ok: boolean
   status: number | null

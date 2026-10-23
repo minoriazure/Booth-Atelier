@@ -1,4 +1,5 @@
 import type { DeepLinkHostPrompt } from '../../../shared/types'
+import { api } from '../api'
 
 /**
  * 深链宿主自检弹窗（应用内，与 AuthExpiredDialog 同风格；替代系统原生对话框）。
@@ -11,6 +12,10 @@ export default function DeepLinkHostDialog({
   info: DeepLinkHostPrompt
   onDecide: (decision: 'register' | 'decline') => void
 }) {
+  const decide = (d: 'register' | 'decline') => {
+    void api.log.write('info', 'dialog', `deeplink host prompt: user chose ${d}`).catch(() => {})
+    onDecide(d)
+  }
   return (
     <div className="modal-mask">
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -27,8 +32,8 @@ export default function DeepLinkHostDialog({
         </p>
         <p>选择「不注册」将关闭启动时的注册检查（可在设置中重新开启）。</p>
         <div className="buttons">
-          <button onClick={() => onDecide('decline')}>不注册</button>
-          <button className="primary" onClick={() => onDecide('register')}>
+          <button onClick={() => decide('decline')}>不注册</button>
+          <button className="primary" onClick={() => decide('register')}>
             注册
           </button>
         </div>

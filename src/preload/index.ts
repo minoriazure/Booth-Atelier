@@ -19,7 +19,10 @@ import type {
   ItemVideo,
   ImageProgress,
   DeepLinkHostPrompt,
-  ProxyTestResult
+  ProxyTestResult,
+  LogDayInfo,
+  LogPageResult,
+  LogSearchResult
 } from '../shared/types'
 
 export interface VideoProgressEvent {
@@ -32,6 +35,14 @@ export interface VideoProgressEvent {
 }
 
 export interface BoothAPI {
+  log: {
+    listDays(): Promise<LogDayInfo[]>
+    readDay(date: string, offset: number, limit: number): Promise<LogPageResult>
+    search(query: string): Promise<LogSearchResult>
+    write(level: 'info' | 'warn' | 'error', scope: string, message: string): Promise<void>
+    /** 日志文件有新增内容时触发（已合并节流） */
+    onAppended(cb: () => void): () => void
+  }
   settings: {
     get(): Promise<Settings>
     set(patch: Partial<Settings>): Promise<Settings>
@@ -137,6 +148,13 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 }
 
 const api: BoothAPI = {
+  log: {
+    listDays: () => ipcRenderer.invoke('log:listDays'),
+    readDay: (date, offset, limit) => ipcRenderer.invoke('log:readDay', date, offset, limit),
+    search: (query) => ipcRenderer.invoke('log:search', query),
+    write: (level, scope, message) => ipcRenderer.invoke('log:write', level, scope, message),
+    onAppended: (cb) => subscribe('event:logAppended', cb)
+  },
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     set: (patch) => ipcRenderer.invoke('settings:set', patch),

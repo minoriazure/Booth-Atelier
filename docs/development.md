@@ -70,10 +70,10 @@ npx electron .
 
 | 模式 | 数据库与日志 |
 | --- | --- |
-| 便携版 | exe 同级 `data/`（库数据）与 `data/electron/`（Electron userData：日志 `logs/main.log`、缓存、单实例锁），下载根默认 exe 同级 `downloads/` |
+| 便携版 | exe 同级 `data/`（库数据、日志 `log/YYYY-MM-DD.log`）与 `data/electron/`（Electron userData：缓存、单实例锁），下载根默认 exe 同级 `downloads/` |
 | 开发版（`npm run dev`，未设置 `PORTABLE_EXECUTABLE_DIR`） | 仓库内 `.temp\electron\`（库数据与 userData 同目录；可用 `BOOTH_DATA_DIR` 覆盖） |
 
-开发版日志位于 `.temp\electron\logs\main.log`，便携版日志位于 exe 同级 `data\electron\logs\main.log`。
+开发版日志位于 `.temp\electron\log\`，便携版日志位于 exe 同级 `data\log\`（按日期命名，如 `2026-10-20.log`）。旧版 `data\electron\logs\main.log` 不再写入，可手动删除。
 
 ## 注意事项
 

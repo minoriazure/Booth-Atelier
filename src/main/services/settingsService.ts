@@ -19,6 +19,7 @@ const DEFAULTS: Omit<Settings, 'downloadRoot' | 'downloadRootMissing'> = {
   // 旧 DB 可能持久化过「首启默认路径」，消费侧仅当路径真实存在时才当作覆盖。
   cookiesPath: '',
   autoRegisterDeepLink: true,
+  logRetentionDays: 60,
   lastLibrarySyncAt: null,
   lastGlobalCheckAt: null
 }

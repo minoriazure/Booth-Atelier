@@ -372,6 +372,21 @@ export default function SettingsPage({
           </div>
         </div>
         <div className="setting-row">
+          <div className="label">日志保留天数</div>
+          <div className="value">
+            <input
+              type="text"
+              style={{ width: 70 }}
+              value={settings.logRetentionDays}
+              onChange={(e) => {
+                const v = Math.max(7, Math.min(180, Math.floor(Number(e.target.value) || 7)))
+                void patch({ logRetentionDays: v })
+              }}
+            />
+            <span className="hint">天（7–180，默认 60）。日志按天保存在 data\log 目录，超出天数的旧日志在启动和修改此设置时自动删除</span>
+          </div>
+        </div>
+        <div className="setting-row">
           <div className="label">并发下载数</div>
           <div className="value">
             <input

@@ -28,6 +28,18 @@ export class AuthChecker {
   constructor(private http: HttpClient) {}
 
   async check(): Promise<{ ok: true; sampleTitle: string }> {
+    try {
+      const r = await this.probe()
+      log.info('auth OK')
+      return r
+    } catch (e) {
+      const kind = e instanceof BoothError ? e.kind : 'unknown'
+      log.warn(`auth check failed kind=${kind}: ${e instanceof Error ? e.message : String(e)}`)
+      throw e
+    }
+  }
+
+  private async probe(): Promise<{ ok: true; sampleTitle: string }> {
     const url = 'https://accounts.booth.pm/library?page=1'
     const res = await this.http.request(url, 'GET')
     const text = await res.text()
@@ -40,7 +52,6 @@ export class AuthChecker {
       }
       throw new BoothError(`未登录或页面异常（title=${title}）`, 'auth', res.status)
     }
-    log.info('auth OK')
     return { ok: true, sampleTitle: title }
   }
 }
