@@ -465,18 +465,62 @@ select {
   color: var(--text-dim);
   font-size: 13px;
 }
-.snapshot-view {
-  background: var(--bg2);
+.history-table tr.history-row-hl > td {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  transition: background 0.6s ease;
+}
+.history-table .history-expand-row > td {
+  padding: 10px 12px 12px;
+  background: var(--bg);
+}
+.history-detail {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 14px 18px;
-  max-height: 480px;
-  overflow: auto;
-  line-height: 1.7;
+  background: var(--bg2);
+  overflow: hidden;
 }
-.snapshot-view img {
-  max-width: 100%;
+.history-detail .file-table {
+  border: none;
+  border-radius: 0;
 }
+.history-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.history-detail-title {
+  padding: 10px 16px 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.history-detail .snapshot-desc {
+  margin: 10px 16px 16px;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.desc-version-row {
+  margin: 0 0 10px;
+}
+.desc-version-hint {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.history-jump-btn {
+  width: 100%;
+  margin-bottom: 12px;
+}
+.history-jump-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 
 /* ── 更新面板 / 历史 / 设置 ── */
 .panel {

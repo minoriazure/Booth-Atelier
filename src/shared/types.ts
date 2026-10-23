@@ -224,14 +224,33 @@ export interface ItemImage {
 
 export interface FileHistoryEntry {
   archivedDate: string
+  /** 归档时间 UTC，格式 YYYY-MM-DD HH:MM:SS（SQLite datetime('now')） */
+  archivedAt: string
   archivedPath: string
   filename: string
   size: number | null
 }
 
+/** 文件历史的一条可选项：同一秒归档的文件归为一组 */
+export interface FileHistoryGroup {
+  archivedAt: string
+  count: number
+}
+
 export interface SnapshotEntry {
+  id: number
   snapshotDate: string
+  /** 快照时间 UTC，格式 YYYY-MM-DD HH:MM:SS */
+  capturedAt: string
   title: string
+}
+
+export interface SnapshotDetail extends SnapshotEntry {
+  itemId: number
+  descriptionHtml: string
+  ogImageUrl: string | null
+  /** 快照 HTML 中远程图片 URL → 已本地化的 media URL（未下载完成的不在其中） */
+  localImages: Record<string, string>
 }
 
 /** 图片下载进度（会话累计） */

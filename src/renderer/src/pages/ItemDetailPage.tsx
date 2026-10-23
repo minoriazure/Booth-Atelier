@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ItemDetailRow, ItemVideo } from '../../../shared/types'
+import type { FileHistoryGroup, ItemDetailRow, ItemVideo, SnapshotDetail, SnapshotEntry } from '../../../shared/types'
 import type { VideoProgressEvent } from '../../../preload/index'
 import DeleteItemDialog from '../components/DeleteItemDialog'
+import { buildBoothDescHtml } from '../components/boothDesc'
+import { formatCapturedAt } from '../components/formatTime'
 import { api } from '../api'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
@@ -285,12 +287,14 @@ export default function ItemDetailPage({
   version,
   onBack,
   onChanged,
+  onOpenHistory,
   toast
 }: {
   itemId: number
   version: number
   onBack: () => void
   onChanged: () => void
+  onOpenHistory: (itemId: number) => void
   toast: ToastFn
 }) {
   const [item, setItem] = useState<ItemDetailRow | null>(null)
@@ -302,13 +306,14 @@ export default function ItemDetailPage({
   const [videoStates, setVideoStates] = useState<Record<string, ItemVideo>>({})
   const [ytDlpOk, setYtDlpOk] = useState<boolean | null>(null)
 
-  // 历史（两个独立下拉）
-  const [fileDates, setFileDates] = useState<string[]>([])
-  const [descDates, setDescDates] = useState<string[]>([])
-  const [fileDate, setFileDate] = useState('')
-  const [descDate, setDescDate] = useState('')
-  const [filesAtDate, setFilesAtDate] = useState<Array<{ filename: string; archivedPath: string; size: number | null }>>([])
-  const [snapshot, setSnapshot] = useState<{ snapshotDate: string; title: string; descriptionHtml: string } | null>(null)
+  // 说明历史：下拉选择快照（null = 当前描述）
+  const [descEntries, setDescEntries] = useState<SnapshotEntry[]>([])
+  const [descSnapId, setDescSnapId] = useState<number | null>(null)
+  const [snapshot, setSnapshot] = useState<SnapshotDetail | null>(null)
+  // 文件历史只需判断是否存在（决定跳转按钮是否可用）
+  const [fileGroups, setFileGroups] = useState<FileHistoryGroup[]>([])
+  // 图片就绪后递增，用于重新读取快照的本地图片映射
+  const [imageTick, setImageTick] = useState(0)
 
   const load = useCallback(async () => {
     const d = await api.library.getItem(itemId)
@@ -318,8 +323,8 @@ export default function ItemDetailPage({
       for (const v of d.videos) map[v.key] = v
       setVideoStates(map)
     }
-    setFileDates(await api.history.listFileDates(itemId))
-    setDescDates(await api.history.listDescriptionDates(itemId))
+    setDescEntries(await api.history.listDescriptionEntries(itemId))
+    setFileGroups(await api.history.listFileGroups(itemId))
   }, [itemId])
 
   useEffect(() => {
@@ -329,6 +334,7 @@ export default function ItemDetailPage({
   // 切换到不同商品时回到顶部（图片就绪触发的重载不回顶）
   useEffect(() => {
     document.querySelector('.main')?.scrollTo({ top: 0 })
+    setDescSnapId(null)
   }, [itemId])
 
   // 打开详情即登记图片（后台补下，不阻塞）
@@ -336,10 +342,13 @@ export default function ItemDetailPage({
     void api.images.enqueueItem(itemId).catch(() => {})
   }, [itemId])
 
-  // 图片就绪 → 刷新本地画廊映射
+  // 图片就绪 → 刷新本地画廊映射与历史快照图片
   useEffect(() => {
     const un = api.events.onImageReady((e) => {
-      if (e.itemId === itemId) void load()
+      if (e.itemId === itemId) {
+        void load()
+        setImageTick((n) => n + 1)
+      }
     })
     return un
   }, [itemId, load])
@@ -380,14 +389,12 @@ export default function ItemDetailPage({
   }, [item, ytDlpOk])
 
   useEffect(() => {
-    if (fileDate) void api.history.listFilesAtDate(itemId, fileDate).then(setFilesAtDate)
-    else setFilesAtDate([])
-  }, [itemId, fileDate])
-
-  useEffect(() => {
-    if (descDate) void api.history.readSnapshot(itemId, descDate).then(setSnapshot)
-    else setSnapshot(null)
-  }, [itemId, descDate])
+    if (descSnapId == null) {
+      setSnapshot(null)
+      return
+    }
+    void api.history.readSnapshot(descSnapId).then(setSnapshot)
+  }, [descSnapId, imageTick])
 
   const doCheck = async (): Promise<void> => {
     setChecking(true)
@@ -467,27 +474,18 @@ export default function ItemDetailPage({
     }
   }
 
-  /** 描述 HTML：pximg 图片替换为本地媒体 URL；iframe 视频占位（由 React 渲染卡片） */
+  /** 描述 HTML：选中历史版本时渲染快照（链接形式视频），否则渲染当前描述（视频占位由下方卡片挂载） */
   const processedDesc = useMemo(() => {
     if (!item) return ''
-    let html = item.descriptionHtml
-    // 描述图片本地化替换
-    for (const g of item.localGallery) {
-      if (g.mediaUrl) {
-        html = html.split(g.url).join(g.mediaUrl)
-        // data-lazy / data-origin 属性同样替换
-        html = html.split(encodeEntities(g.url)).join(g.mediaUrl)
-      }
+    if (snapshot) {
+      return buildBoothDescHtml(snapshot.descriptionHtml, { localImages: snapshot.localImages, videos: null })
     }
-    // 视频 iframe → 占位标记（由下方 React 卡片按顺序覆盖渲染）
-    html = html.replace(/<iframe[^>]*src="([^"]+)"[^>]*>[\s\S]*?<\/iframe>/gi, (_m, src) => {
-      const v = findVideoBySrc(item.videos, decodeAttr(src))
-      if (v) return `<div class="video-slot" data-key="${v.key}"></div>`
-      // 未知 iframe 保留（如 booth 自家），但加安全限制
-      return _m.replace(/src=/, 'sandbox="allow-scripts allow-same-origin allow-popups" src=')
-    })
-    return html
-  }, [item])
+    const localImages: Record<string, string> = {}
+    for (const g of item.localGallery) {
+      if (g.mediaUrl) localImages[g.url] = g.mediaUrl
+    }
+    return buildBoothDescHtml(item.descriptionHtml, { localImages, videos: item.videos })
+  }, [item, snapshot])
 
   // 渲染后把占位 div 替换成视频卡片：用 ref 收集 slot，React Portal 式渲染
   const descRef = useRef<HTMLDivElement>(null)
@@ -565,6 +563,19 @@ export default function ItemDetailPage({
             </div>
           )}
 
+          <div className="history-row desc-version-row">
+            <label>📝 说明版本：</label>
+            <select value={descSnapId ?? ''} onChange={(e) => setDescSnapId(e.target.value ? Number(e.target.value) : null)}>
+              <option value="">当前描述</option>
+              {descEntries.map((s) => (
+                <option key={s.id} value={s.id}>{formatCapturedAt(s.capturedAt)}</option>
+              ))}
+            </select>
+            {descSnapId != null && snapshot && (
+              <span className="desc-version-hint">正在查看 {formatCapturedAt(snapshot.capturedAt)} 的说明（视频以链接显示）</span>
+            )}
+          </div>
+
           <div
             className="desc desc-html"
             ref={descRef}
@@ -581,62 +592,18 @@ export default function ItemDetailPage({
               <VideoCard key={v.key} video={v} onDownload={(k) => void doDownloadVideo(k)} downloading={videoStates[v.key]?.status === 'downloading'} />
             ))}
           </div>
-
-          {/* ── 历史（两个独立下拉） ── */}
-          <div className="section-title">历史版本</div>
-          <div className="history-row">
-            <label>📁 文件历史：</label>
-            <select value={fileDate} onChange={(e) => setFileDate(e.target.value)}>
-              <option value="">选择日期…</option>
-              {fileDates.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-            <label style={{ marginLeft: 12 }}>📝 说明历史：</label>
-            <select value={descDate} onChange={(e) => setDescDate(e.target.value)}>
-              <option value="">选择日期…</option>
-              {descDates.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-          </div>
-          {fileDate && (
-            <div className="panel">
-              {filesAtDate.length === 0 ? (
-                <div className="empty" style={{ padding: 16 }}>{fileDate} 没有归档的文件</div>
-              ) : (
-                <table className="file-table">
-                  <tbody>
-                    {filesAtDate.map((f, i) => (
-                      <tr key={i}>
-                        <td className="fname">{f.filename}</td>
-                        <td>{formatBytes(f.size)}</td>
-                        <td><button onClick={() => void api.history.revealPath(f.archivedPath)}>打开位置</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-          {descDate && (
-            <div className="snapshot-view">
-              {snapshot ? (
-                <>
-                  <div style={{ color: 'var(--text-dim)', fontSize: 12, marginBottom: 8 }}>
-                    {snapshot.snapshotDate} 的说明快照{snapshot.snapshotDate !== descDate && `（≤ ${descDate} 的最新）`}
-                  </div>
-                  <div dangerouslySetInnerHTML={{ __html: sanitizeDesc(snapshot.descriptionHtml) }} />
-                </>
-              ) : (
-                <div className="empty" style={{ padding: 16 }}>{descDate} 没有说明快照</div>
-              )}
-            </div>
-          )}
         </div>
 
         {/* ── 右列：文件下载管理侧栏 ── */}
         <aside className="detail2-side">
+          <button
+            className="history-jump-btn"
+            disabled={fileGroups.length === 0}
+            onClick={() => onOpenHistory(itemId)}
+            title={fileGroups.length === 0 ? '该商品暂无文件历史' : '在历史页查看该商品的文件历史'}
+          >
+            📁 查看文件历史{fileGroups.length > 0 && `（${fileGroups.length}）`}
+          </button>
           <div className="side-card">
             <div className="side-card-title">
               文件下载
@@ -695,23 +662,6 @@ export default function ItemDetailPage({
   )
 }
 
-/** 按 src 反查视频 */
-function findVideoBySrc(videos: ItemVideo[], src: string): ItemVideo | null {
-  for (const v of videos) {
-    if (v.embedUrl === src || v.url === src) return v
-    if (src.includes(v.videoId)) return v
-  }
-  return null
-}
-
-function decodeAttr(s: string): string {
-  return s.replace(/&amp;/g, '&').replace(/&quot;/g, '"')
-}
-
-function encodeEntities(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-}
-
 /** 视频占位 → DOM 卡片（下载进度实时更新） */
 function renderVideoCardDom(
   holder: HTMLElement,
@@ -761,15 +711,4 @@ function renderVideoCardDom(
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-/** 轻量清理历史快照 HTML */
-function sanitizeDesc(html: string): string {
-  if (!html) return ''
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
 }

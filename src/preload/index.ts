@@ -13,7 +13,9 @@ import type {
   FileListRow,
   DownloadStats,
   FileHistoryEntry,
+  FileHistoryGroup,
   SnapshotEntry,
+  SnapshotDetail,
   ItemVideo,
   ImageProgress,
   DeepLinkHostPrompt,
@@ -74,10 +76,10 @@ export interface BoothAPI {
     records(limit?: number): Promise<Array<Record<string, unknown>>>
   }
   history: {
-    listFileDates(itemId: number): Promise<string[]>
-    listDescriptionDates(itemId: number): Promise<string[]>
-    readSnapshot(itemId: number, date: string): Promise<{ snapshotDate: string; title: string; descriptionHtml: string; ogImageUrl: string | null } | null>
-    listFilesAtDate(itemId: number, date: string): Promise<Array<{ filename: string; archivedPath: string; size: number | null }>>
+    listFileGroups(itemId: number): Promise<FileHistoryGroup[]>
+    listFilesAtArchive(itemId: number, archivedAt: string): Promise<FileHistoryEntry[]>
+    listDescriptionEntries(itemId: number): Promise<SnapshotEntry[]>
+    readSnapshot(snapshotId: number): Promise<SnapshotDetail | null>
     openPath(p: string): Promise<void>
     revealPath(p: string): Promise<void>
   }
@@ -172,10 +174,10 @@ const api: BoothAPI = {
     records: (limit) => ipcRenderer.invoke('downloads:records', limit)
   },
   history: {
-    listFileDates: (id) => ipcRenderer.invoke('history:listFileDates', id),
-    listDescriptionDates: (id) => ipcRenderer.invoke('history:listDescriptionDates', id),
-    readSnapshot: (id, date) => ipcRenderer.invoke('history:readSnapshot', id, date),
-    listFilesAtDate: (id, date) => ipcRenderer.invoke('history:listFilesAtDate', id, date),
+    listFileGroups: (id) => ipcRenderer.invoke('history:listFileGroups', id),
+    listFilesAtArchive: (id, archivedAt) => ipcRenderer.invoke('history:listFilesAtArchive', id, archivedAt),
+    listDescriptionEntries: (id) => ipcRenderer.invoke('history:listDescriptionEntries', id),
+    readSnapshot: (snapshotId) => ipcRenderer.invoke('history:readSnapshot', snapshotId),
     openPath: (p) => ipcRenderer.invoke('history:openPath', p),
     revealPath: (p) => ipcRenderer.invoke('history:revealPath', p)
   },

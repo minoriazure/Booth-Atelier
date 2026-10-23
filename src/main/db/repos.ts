@@ -6,7 +6,8 @@ import type {
   ItemDetailRow,
   ItemSummary,
   SnapshotEntry,
-  FileHistoryEntry
+  FileHistoryEntry,
+  FileHistoryGroup
 } from '../../shared/types'
 
 /** items + downloadables 读写 */
@@ -371,8 +372,18 @@ export class LibraryRepo {
 
   listSnapshotDates(itemId: number): SnapshotEntry[] {
     return this.db.all<SnapshotEntry>(
-      `SELECT snapshot_date AS snapshotDate, title FROM metadata_snapshots WHERE item_id = ? ORDER BY snapshot_date DESC, id DESC`,
+      `SELECT id, snapshot_date AS snapshotDate, captured_at AS capturedAt, title
+       FROM metadata_snapshots WHERE item_id = ? ORDER BY id DESC`,
       [itemId]
+    )
+  }
+
+  getSnapshotById(id: number): (SnapshotEntry & { descriptionHtml: string; ogImageUrl: string | null; galleryJson: string; itemId: number }) | undefined {
+    return this.db.get(
+      `SELECT id, item_id AS itemId, snapshot_date AS snapshotDate, captured_at AS capturedAt, title,
+              description_html AS descriptionHtml, og_image_url AS ogImageUrl, gallery_json AS galleryJson
+       FROM metadata_snapshots WHERE id = ?`,
+      [id]
     )
   }
 
@@ -403,9 +414,26 @@ export class LibraryRepo {
 
   listFileHistoryDates(itemId: number): FileHistoryEntry[] {
     return this.db.all<FileHistoryEntry>(
-      `SELECT archived_date AS archivedDate, archived_path AS archivedPath, filename, size FROM file_history
-       WHERE item_id = ? ORDER BY archived_date DESC, id DESC`,
+      `SELECT archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
+       FROM file_history WHERE item_id = ? ORDER BY archived_at DESC, id DESC`,
       [itemId]
+    )
+  }
+
+  /** 按归档秒分组（同一秒归档的文件为一组），新的在前 */
+  listFileHistoryGroups(itemId: number): FileHistoryGroup[] {
+    return this.db.all<FileHistoryGroup>(
+      `SELECT archived_at AS archivedAt, COUNT(*) AS count FROM file_history
+       WHERE item_id = ? GROUP BY archived_at ORDER BY archived_at DESC`,
+      [itemId]
+    )
+  }
+
+  listFilesAtArchive(itemId: number, archivedAt: string): FileHistoryEntry[] {
+    return this.db.all<FileHistoryEntry>(
+      `SELECT archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
+       FROM file_history WHERE item_id = ? AND archived_at = ? ORDER BY filename`,
+      [itemId, archivedAt]
     )
   }
 

@@ -18,6 +18,23 @@ function tryMedia(absPath: string | null): string | null {
   return absPath ? mediaUrl(absPath) : null
 }
 
+/**
+ * 历史快照中的远程图片：登记为 desc 图片后台下载，返回已就绪的映射。
+ * 未下载完成的不在映射中，渲染层保留远程 URL，图片就绪事件到达后重新读取。
+ */
+function localizeSnapshotImages(ctx: AppContext, itemId: number, html: string): Record<string, string> {
+  const urls = new Set<string>()
+  for (const m of html.matchAll(/<img\b[^>]*?\ssrc="(https?:\/\/[^"]+)"/gi)) urls.add(m[1])
+  if (urls.size === 0) return {}
+  ctx.imageLocalizer.registerItemImages(itemId, Array.from(urls, (url) => ({ url, kind: 'desc' })))
+  const map: Record<string, string> = {}
+  for (const u of urls) {
+    const local = ctx.imageLocalizer.resolveLocalFor(itemId, u)
+    if (local) map[u] = mediaUrl(local)
+  }
+  return map
+}
+
 /** 注册全部 IPC 通道；所有入参 Zod 校验 */
 export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | null): void {
   const send = (channel: string, payload: unknown): void => {
@@ -230,13 +247,16 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   handle('downloads:records', (limit?: unknown) => ctx.repo.listDownloadRecords(typeof limit === 'number' ? limit : 100))
 
   // ── history ──
-  handle('history:listFileDates', (itemId: unknown) => ctx.history.listFileDates(id.parse(itemId)))
-  handle('history:listDescriptionDates', (itemId: unknown) => ctx.history.listDescriptionDates(id.parse(itemId)))
-  handle('history:readSnapshot', (itemId: unknown, date: unknown) => {
-    const s = ctx.history.readSnapshotAsOf(id.parse(itemId), q.parse(date))
-    return s ?? null
+  handle('history:listFileGroups', (itemId: unknown) => ctx.history.listFileGroups(id.parse(itemId)))
+  handle('history:listFilesAtArchive', (itemId: unknown, archivedAt: unknown) =>
+    ctx.history.listFilesAtArchive(id.parse(itemId), q.parse(archivedAt))
+  )
+  handle('history:listDescriptionEntries', (itemId: unknown) => ctx.history.listDescriptionEntries(id.parse(itemId)))
+  handle('history:readSnapshot', (snapshotId: unknown) => {
+    const s = ctx.history.readSnapshot(id.parse(snapshotId))
+    if (!s) return null
+    return { ...s, localImages: localizeSnapshotImages(ctx, s.itemId, s.descriptionHtml) }
   })
-  handle('history:listFilesAtDate', (itemId: unknown, date: unknown) => ctx.history.listFilesAtDate(id.parse(itemId), q.parse(date)))
   handle('history:openPath', (p: unknown) => shell.openPath(q.parse(p)))
   handle('history:revealPath', (p: unknown) => shell.showItemInFolder(q.parse(p)))
 

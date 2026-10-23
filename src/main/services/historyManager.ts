@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync, copyFileSync, unlinkS
 import { join } from 'path'
 import type { LibraryRepo } from '../db/repos'
 import type { Paths } from '../util/paths'
+import type { FileHistoryGroup, SnapshotDetail, SnapshotEntry } from '../../shared/types'
 import { localDate, sanitizeFilename, withSuffix } from '../util/filenames'
 import { createLogger } from '../util/log'
 
@@ -119,37 +120,39 @@ export class HistoryManager {
     }
   }
 
-  /** 文件历史日期列表（含当前文件下载日期，去重降序） */
-  listFileDates(itemId: number): string[] {
-    const rows = this.repo.listFileHistoryDates(itemId)
-    const dates = new Set<string>()
-    for (const r of rows) dates.add(r.archivedDate)
-    return Array.from(dates).sort().reverse()
+  /** 文件历史分组（按归档秒，新的在前） */
+  listFileGroups(itemId: number): FileHistoryGroup[] {
+    return this.repo.listFileHistoryGroups(itemId)
   }
 
-  /** 描述快照日期列表（降序） */
-  listDescriptionDates(itemId: number): string[] {
-    return this.repo.listSnapshotDates(itemId).map((s) => s.snapshotDate)
+  /** 某次归档（同一秒）包含的文件 */
+  listFilesAtArchive(itemId: number, archivedAt: string): Array<{ filename: string; archivedPath: string; size: number | null; archivedAt: string }> {
+    return this.repo.listFilesAtArchive(itemId, archivedAt).map((r) => ({
+      filename: r.filename,
+      archivedPath: r.archivedPath,
+      size: r.size,
+      archivedAt: r.archivedAt
+    }))
   }
 
-  /** 读取某日期的描述快照（≤ date 的最新） */
-  readSnapshotAsOf(itemId: number, date: string): { snapshotDate: string; title: string; descriptionHtml: string; ogImageUrl: string | null } | undefined {
-    const s = this.repo.getSnapshotAsOf(itemId, date)
+  /** 描述快照条目（每次写入一条，新的在前） */
+  listDescriptionEntries(itemId: number): SnapshotEntry[] {
+    return this.repo.listSnapshotDates(itemId)
+  }
+
+  /** 读取单条描述快照（不含本地图片映射，由 IPC 层补充） */
+  readSnapshot(id: number): Omit<SnapshotDetail, 'localImages'> | undefined {
+    const s = this.repo.getSnapshotById(id)
     if (!s) return undefined
     return {
+      id: s.id,
+      itemId: s.itemId,
       snapshotDate: s.snapshotDate,
+      capturedAt: s.capturedAt,
       title: s.title,
       descriptionHtml: s.descriptionHtml,
       ogImageUrl: s.ogImageUrl
     }
-  }
-
-  /** 某日期归档的文件列表 */
-  listFilesAtDate(itemId: number, date: string): Array<{ filename: string; archivedPath: string; size: number | null }> {
-    return this.repo
-      .listFileHistoryDates(itemId)
-      .filter((r) => r.archivedDate === date)
-      .map((r) => ({ filename: r.filename, archivedPath: r.archivedPath, size: r.size }))
   }
 }
 

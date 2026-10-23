@@ -4,7 +4,7 @@ import { api } from './api'
 import LibraryWallPage from './pages/LibraryWallPage'
 import ItemDetailPage from './pages/ItemDetailPage'
 import UpdatesPage from './pages/UpdatesPage'
-import HistoryPage from './pages/HistoryPage'
+import HistoryPage, { type HistoryFocus } from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
 import AuthExpiredDialog from './components/AuthExpiredDialog'
 import DeepLinkHostDialog from './components/DeepLinkHostDialog'
@@ -161,6 +161,16 @@ export default function App() {
     setDetailId(id)
   }, [])
 
+  const [historyFocus, setHistoryFocus] = useState<HistoryFocus | null>(null)
+  const openHistoryFor = useCallback((itemId: number) => {
+    setHistoryFocus({ itemId, nonce: Date.now() })
+    setTab('history')
+  }, [])
+  // 定位请求只在本次进入历史页时生效，离开后清空，避免下次进入又高亮
+  useEffect(() => {
+    if (tab !== 'history') setHistoryFocus(null)
+  }, [tab])
+
   const runCheck = useCallback(
     async (fn: () => Promise<CheckSummary>, label: string) => {
       try {
@@ -268,10 +278,11 @@ export default function App() {
               onBack={() => setDetailId(null)}
               onChanged={() => setLibraryVersion((v) => v + 1)}
               toast={pushToast}
+              onOpenHistory={openHistoryFor}
             />
           ))}
         {tab === 'updates' && <UpdatesPage version={libraryVersion} toast={pushToast} onRunCheck={doCheckGlobal} />}
-        {tab === 'history' && <HistoryPage version={libraryVersion} onOpen={openDetail} />}
+        {tab === 'history' && <HistoryPage version={libraryVersion} onOpen={openDetail} focus={historyFocus} />}
         {tab === 'settings' && (
           <SettingsPage
             settings={settings}
