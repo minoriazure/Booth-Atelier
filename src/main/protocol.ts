@@ -299,12 +299,14 @@ async function parseAndStart(raw: string, deps: ProtocolDeps): Promise<void> {
         return downloads.downloadNow(f.downloadableId, 'deeplink')
       })
     )
-    for (const r of outcomes) {
+    for (const [i, r] of outcomes.entries()) {
+      const f = parsed.files[i]
       if (r === 'noid') noId++
       else if (r === 'started') started++
       else if (r === 'active') alreadyActive++
       else if (r === 'skipped') upToDate++
       else missing++ // 'missing'
+      log.info(`protocol import file: item=#${f.itemId || parsed.itemId} link=#${f.downloadableId ?? '?'} file="${f.filename}" → ${r}`)
     }
     const label = parsed.files[0]?.filename || `#${parsed.files[0]?.downloadableId ?? '?'}`
     if (started > 0) {

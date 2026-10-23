@@ -8,7 +8,7 @@ import { existsSync } from 'fs'
 import type { CheckProgressEvent, CheckSummary, ItemDetail } from '../../shared/types'
 import { localDate } from '../util/filenames'
 import { BoothError, isAuthError } from '../booth/errors'
-import { createLogger } from '../util/log'
+import { createLogger, describeLink } from '../util/log'
 
 const log = createLogger('librarySync')
 
@@ -45,6 +45,7 @@ export class LibrarySyncService {
       // 1) 列表页
       this.onProgress?.({ phase: 'library', current: 0, total: 0, label: '抓取库列表…' })
       const seen = new Set<number>()
+      const knownIds = new Set(this.dbAllItemIds())
       /** 商品 → 列表页当前提供的 downloadable 集合（检测消失的旧链接用） */
       const crawledDl = new Map<number, Set<number>>()
       const kinds: Array<'library' | 'gifts'> = ['library', 'gifts']
@@ -54,6 +55,10 @@ export class LibrarySyncService {
         })
         for (const it of items) {
           seen.add(it.itemId)
+          if (!knownIds.has(it.itemId)) {
+            log.info(`new item (${kind}): item=#${it.itemId}「${it.title.slice(0, 40)}」 links=${it.downloadables.length}`)
+            for (const d of it.downloadables) log.info(`  - new link: link=#${d.downloadableId} file="${d.filename}"`)
+          }
           crawledDl.set(it.itemId, new Set(it.downloadables.map((d) => d.downloadableId)))
           this.repo.upsertFromList({
             itemId: it.itemId,
@@ -79,7 +84,12 @@ export class LibrarySyncService {
       const allIds = this.dbAllItemIds()
       const freeIds = new Set(this.repo.listFreeItemIds())
       for (const id of allIds) {
-        if (!seen.has(id) && !freeIds.has(id)) this.repo.markAbsent(id)
+        if (!seen.has(id) && !freeIds.has(id)) {
+          const title = this.repo.getItemTitle(id)
+          const state = this.repo.markAbsent(id)
+          if (state === 'missing') log.warn(`absent: item=#${id}「${title.slice(0, 40)}」 not in library list 2 times → marked missing`)
+          else log.info(`absent: item=#${id}「${title.slice(0, 40)}」 not in library list (counted, not yet missing)`)
+        }
       }
 
       // 2b) 消失的下载链接：作者删除旧文件改名重传（_V2 等）时，旧 downloadable 不再出现在列表。
@@ -88,8 +98,13 @@ export class LibrarySyncService {
       for (const [itemId, keep] of crawledDl) {
         if (keep.size === 0) continue // 列表解析异常，跳过判定
         const dbRows = this.repo.listDownloadablesOfItem(itemId)
+        const knownLinks = new Set(dbRows.map((r) => r.downloadableId))
+        for (const d of keep) {
+          if (!knownLinks.has(d)) log.info(`new link on existing item: link=#${d} item=#${itemId}`)
+        }
         for (const row of dbRows) {
           if (row.status === 'missing' || keep.has(row.downloadableId)) continue
+          const desc = describeLink(row)
           if (row.localPath && existsSync(row.localPath)) {
             const archived = this.history.archivePath(itemId, row.localPath)
             if (archived) {
@@ -102,8 +117,10 @@ export class LibrarySyncService {
                 etag: row.lastEtag,
                 size: row.lastSize
               })
-              log.info(`vanished link #${row.downloadableId} (${itemId}): old file → ${archived}`)
+              log.info(`vanished link (old file archived): ${desc} → ${archived}`)
             }
+          } else {
+            log.info(`vanished link (no local file): ${desc}`)
           }
           this.repo.setStatus(row.downloadableId, 'missing')
           this.repo.run('UPDATE downloadables SET local_path = NULL, local_size = NULL WHERE downloadable_id = ?', [row.downloadableId])
@@ -124,12 +141,15 @@ export class LibrarySyncService {
           if (this.applyDetail(itemId, detail)) summary.libraryChanged++
         } catch (e) {
           if (isAuthError(e)) throw e
+          const title = this.repo.getItemTitle(itemId)
+          const itemDesc = `item=#${itemId}「${title.slice(0, 40)}」`
           if (e instanceof BoothError && e.kind === 'not_found') {
             this.repo.run(`UPDATE items SET status = 'missing' WHERE item_id = ?`, [itemId])
-            log.info(`item ${itemId} not found on BOOTH (404), marked missing`)
+            log.info(`${itemDesc} not found on BOOTH (404), marked missing`)
             continue
           }
-          log.warn(`detail fetch failed ${itemId}:`, e instanceof Error ? e.message : e)
+          const status = e instanceof BoothError && e.status != null ? ` http=${e.status}` : ''
+          log.warn(`detail fetch failed: ${itemDesc}${status} → ${e instanceof Error ? e.message : e}`)
           summary.failed++
         }
       }

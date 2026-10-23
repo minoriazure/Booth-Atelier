@@ -10,7 +10,7 @@ import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { Paths } from '../util/paths'
 import { sanitizeFilename, localDate } from '../util/filenames'
-import { createLogger } from '../util/log'
+import { createLogger, describeLink } from '../util/log'
 
 const log = createLogger('download')
 
@@ -63,13 +63,14 @@ export class DownloadManager {
   enqueue(downloadableId: number, source: DownloadSource, deferPump = false): boolean {
     const d = this.repo.getDownloadable(downloadableId)
     if (!d) {
-      log.warn(`enqueue unknown downloadable ${downloadableId}`)
+      log.warn(`enqueue unknown downloadable: link=#${downloadableId}`)
       return false
     }
     if (this.active.has(downloadableId)) return false
     if (this.queue.some((j) => j.downloadableId === downloadableId)) return false
     this.queue.push({ downloadableId, itemId: d.itemId, source, enqueuedAt: Date.now() })
     this.repo.setQueuedAt(downloadableId, new Date().toISOString()) // 持久化：重启后恢复排队，不回退待下载
+    log.info(`queued (${source}): ${describeLink({ itemId: d.itemId, itemTitle: this.repo.getItemTitle(d.itemId), downloadableId, filename: d.filename })}`)
     this.onQueueChanged?.()
     if (!deferPump) this.pump()
     return true
@@ -189,7 +190,7 @@ export class DownloadManager {
       size: d.lastSize
     })
     this.repo.run('UPDATE downloadables SET local_path = NULL, local_size = NULL WHERE downloadable_id = ?', [downloadableId])
-    log.info(`archive on update: ${d.localPath} → ${archived}`)
+    log.info(`archive on update: ${describeLink({ itemId: d.itemId, itemTitle: this.repo.getItemTitle(d.itemId), downloadableId, filename: d.filename })} ${d.localPath} → ${archived}`)
     return archived
   }
 
@@ -205,7 +206,7 @@ export class DownloadManager {
         status: 'cancelled'
       })
       this.onQueueChanged?.()
-      log.info(`cancelled queued: #${downloadableId}`)
+      log.info(`cancelled queued: ${describeLink({ itemId: job.itemId, itemTitle: this.repo.getItemTitle(job.itemId), downloadableId, filename: this.repo.getDownloadable(downloadableId)?.filename })}`)
       return true
     }
     const act = this.active.get(downloadableId)
@@ -374,7 +375,7 @@ export class DownloadManager {
 
     const d = this.repo.getDownloadable(job.downloadableId)
     const label = d?.filename || `#${job.downloadableId}`
-
+    const desc = describeLink({ itemId: job.itemId, itemTitle: this.repo.getItemTitle(job.itemId), downloadableId: job.downloadableId, filename: d?.filename })
     try {
       const result = await this.downloadOne(job, abort.signal, label, decide)
       if (this.disposed) return // 下载完成但进程退出中：文件已落盘，跳过 DB 写
@@ -413,7 +414,7 @@ export class DownloadManager {
       })
 
       if (result.skipped) {
-        log.info(`skipped: ${label} (up-to-date，指纹一致未重新下载) source=${job.source}`)
+        log.info(`skipped: ${desc} (up-to-date，指纹一致未重新下载) source=${job.source}`)
       } else {
         this.onDone?.({
           downloadableId: job.downloadableId,
@@ -423,7 +424,7 @@ export class DownloadManager {
           source: job.source,
           archivedPath
         })
-        log.info(`done: ${label} (${result.size} bytes) source=${job.source}`)
+        log.info(`done: ${desc} (${result.size} bytes) source=${job.source} → ${result.path}`)
       }
     } catch (e) {
       if (this.disposed) return // 进程退出竞态：DB 已关，丢弃记录
@@ -442,7 +443,7 @@ export class DownloadManager {
           source: job.source,
           status: 'cancelled'
         })
-        log.info(`cancelled: ${label}`)
+        log.info(`cancelled: ${desc}`)
       } else {
         // 认证中断回队的保留 queued_at；真失败回失败态（清排队标记）
         const stillQueued = this.queue.some((j) => j.downloadableId === job.downloadableId)
@@ -458,7 +459,7 @@ export class DownloadManager {
           log.warn('auth error during download, pausing queue')
           this.pauseForAuth()
         }
-        log.error(`failed: ${label}: ${msg}`)
+        log.error(`failed: ${desc} source=${job.source} → ${msg}`)
         this.onError?.({ downloadableId: job.downloadableId, itemId: job.itemId, filename: label, error: msg, auth })
       }
     } finally {
@@ -490,7 +491,7 @@ export class DownloadManager {
       if (!d.fallbackUrl) throw e
       // 回退通道：booth.pm/downloadables/{id}（浏览器 Download 按钮，服务端打包 zip）
       fallbackUsed = true
-      log.warn(`deeplink failed for ${job.downloadableId}, using fallback URL:`, e instanceof Error ? e.message : e)
+      log.warn(`deeplink failed for ${describeLink({ itemId: job.itemId, itemTitle: this.repo.getItemTitle(job.itemId), downloadableId: job.downloadableId, filename: d.filename })}, using fallback URL → ${e instanceof Error ? e.message : e}`)
       resolved = { dlurl: d.fallbackUrl, filename: `${d.filename || `downloadable_${job.downloadableId}`}.zip` }
       fp = { etag: null, size: null, lastModified: null, contentType: 'application/zip' }
     }

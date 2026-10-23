@@ -92,16 +92,19 @@ export class VideoService {
     if (!v) return { ok: false, error: '视频不存在' }
     if (this.active.has(key)) return { ok: false, error: '正在下载中' }
 
+    const itemId = this.findItemOfVideo(key)
+    const title = this.repo.getItemTitle(itemId)
+    const vdesc = `item=#${itemId}${title ? `「${title}」` : ''} video=${v.videoId}`
+
     const ytdlp = await this.checkYtDlp()
     if (!ytdlp) {
       const error = '未检测到 yt-dlp，请安装并加入 PATH（pip install yt-dlp）'
       this.repo.setVideoStatus(key, 'failed')
-      this.onProgress?.({ key, itemId: v ? this.findItemOfVideo(key) : 0, progress: 0, status: 'failed', error })
-      log.warn(`video failed (yt-dlp missing): ${key}`)
+      this.onProgress?.({ key, itemId, progress: 0, status: 'failed', error })
+      log.warn(`video failed (yt-dlp missing): ${vdesc}`)
       return { ok: false, error }
     }
 
-    const itemId = this.findItemOfVideo(key)
     const dir = this.paths.videosDir(itemId)
     mkdirSafe(dir)
     // yt-dlp 输出模板：{videoId}.%(ext)s
@@ -123,7 +126,7 @@ export class VideoService {
         '-o', outTpl,
         v.url
       ]
-      log.info(`yt-dlp download: ${v.url} → ${dir}`)
+      log.info(`yt-dlp download: ${vdesc} url=${v.url} → ${dir}`)
       const child = spawn('yt-dlp', args, { shell: process.platform === 'win32' })
       let lastPct = -1
       let stderrTail = ''
@@ -157,7 +160,7 @@ export class VideoService {
         this.active.delete(key)
         this.repo.setVideoStatus(key, 'failed')
         this.onProgress?.({ key, itemId: itemId2, progress: 0, status: 'failed', error: err.message })
-        log.warn(`video failed (spawn): ${key}: ${err.message}`)
+        log.warn(`video failed (spawn): ${vdesc}: ${err.message}`)
         resolve({ ok: false, error: err.message })
       })
 
@@ -167,7 +170,7 @@ export class VideoService {
           const error = stderrTail.split('\n').filter(Boolean).pop() || `yt-dlp 退出码 ${code}`
           this.repo.setVideoStatus(key, 'failed')
           this.onProgress?.({ key, itemId: itemId2, progress: 0, status: 'failed', error })
-          log.warn(`video failed (exit ${code}): ${key}: ${error}`)
+          log.warn(`video failed (exit ${code}): ${vdesc}: ${error}`)
           resolve({ ok: false, error })
           return
         }
@@ -176,13 +179,13 @@ export class VideoService {
         if (!file) {
           this.repo.setVideoStatus(key, 'failed')
           this.onProgress?.({ key, itemId: itemId2, progress: 0, status: 'failed', error: '下载完成但未找到输出文件' })
-          log.warn(`video failed (no output file): ${key}`)
+          log.warn(`video failed (no output file): ${vdesc} dir=${dir}`)
           resolve({ ok: false, error: '未找到输出文件' })
           return
         }
         this.repo.setVideoStatus(key, 'downloaded', file)
         this.onProgress?.({ key, itemId: itemId2, progress: 100, status: 'downloaded', localPath: file })
-        log.info(`video done: ${file} (${statSync(file).size} bytes)`)
+        log.info(`video done: ${vdesc} file=${file} (${statSync(file).size} bytes)`)
         resolve({ ok: true, path: file })
       })
     })

@@ -74,6 +74,15 @@ function writeLine(level: string, scope: string, args: unknown[]): void {
   else console.log(line)
 }
 
+/** 统一的条目描述：商品号 + 标题 + 链接 ID + 文件名，用于文件/商品/更新相关日志 */
+export function describeLink(t: { itemId: number; itemTitle?: string | null; downloadableId?: number; filename?: string | null }): string {
+  const parts = [`item=#${t.itemId}`]
+  if (t.itemTitle) parts.push(`「${t.itemTitle.slice(0, 40)}」`)
+  if (t.downloadableId != null) parts.push(`link=#${t.downloadableId}`)
+  if (t.filename) parts.push(`file="${t.filename}"`)
+  return parts.join(' ')
+}
+
 export function createLogger(scope: string): Logger {
   return {
     info: (...a) => writeLine('INFO', scope, a),

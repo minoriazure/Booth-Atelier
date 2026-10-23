@@ -102,6 +102,11 @@ export class LibraryRepo {
   }
 
   /** 标记缺席（连续 2 次后置 missing） */
+  /** 商品标题（仅用于日志；不存在时返回空串） */
+  getItemTitle(itemId: number): string {
+    return this.db.get<{ title: string }>('SELECT title FROM items WHERE item_id = ?', [itemId])?.title ?? ''
+  }
+
   markAbsent(itemId: number): 'active' | 'missing' {
     this.db.run(`UPDATE items SET absent_count = absent_count + 1 WHERE item_id = ?`, [itemId])
     const row = this.db.get<{ absent_count: number; status: string }>('SELECT absent_count, status FROM items WHERE item_id = ?', [itemId])
@@ -196,14 +201,15 @@ export class LibraryRepo {
     }
   }
 
-  listAllDownloadables(limit?: number): Array<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }> {
-    type Row = { downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }
+  listAllDownloadables(limit?: number): Array<{ downloadableId: number; itemId: number; itemTitle: string; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }> {
+    type Row = { downloadableId: number; itemId: number; itemTitle: string; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }
     const rows = this.db.all<Row>(
-      `SELECT downloadable_id AS downloadableId, item_id AS itemId, filename, variation_id AS variationId,
-              status, last_etag AS lastEtag, last_size AS lastSize, local_path AS localPath
-       FROM downloadables
-       WHERE status != 'missing' AND item_id NOT IN (SELECT item_id FROM items WHERE is_free = 1)
-       ORDER BY item_id, downloadable_id ${limit ? 'LIMIT ' + limit : ''}`
+      `SELECT d.downloadable_id AS downloadableId, d.item_id AS itemId, COALESCE(i.title, '') AS itemTitle, d.filename, d.variation_id AS variationId,
+              d.status, d.last_etag AS lastEtag, d.last_size AS lastSize, d.local_path AS localPath
+       FROM downloadables d
+       LEFT JOIN items i ON i.item_id = d.item_id
+       WHERE d.status != 'missing' AND d.item_id NOT IN (SELECT item_id FROM items WHERE is_free = 1)
+       ORDER BY d.item_id, d.downloadable_id ${limit ? 'LIMIT ' + limit : ''}`
     )
     return rows.map((r) => ({ ...r, localPath: this.downloadLocalOut(r.localPath) }))
   }
@@ -307,11 +313,13 @@ export class LibraryRepo {
       .map((r) => r.downloadable_id)
   }
 
-  listDownloadablesOfItem(itemId: number): Array<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }> {
-    const rows = this.db.all<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }>(
-      `SELECT downloadable_id AS downloadableId, item_id AS itemId, filename, variation_id AS variationId,
-              status, last_etag AS lastEtag, last_size AS lastSize, local_path AS localPath
-       FROM downloadables WHERE item_id = ? AND status != 'missing' ORDER BY downloadable_id`,
+  listDownloadablesOfItem(itemId: number): Array<{ downloadableId: number; itemId: number; itemTitle: string; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }> {
+    const rows = this.db.all<{ downloadableId: number; itemId: number; itemTitle: string; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath: string | null }>(
+      `SELECT d.downloadable_id AS downloadableId, d.item_id AS itemId, COALESCE(i.title, '') AS itemTitle, d.filename, d.variation_id AS variationId,
+              d.status, d.last_etag AS lastEtag, d.last_size AS lastSize, d.local_path AS localPath
+       FROM downloadables d
+       LEFT JOIN items i ON i.item_id = d.item_id
+       WHERE d.item_id = ? AND d.status != 'missing' ORDER BY d.downloadable_id`,
       [itemId]
     )
     return rows.map((r) => ({ ...r, localPath: this.downloadLocalOut(r.localPath) }))

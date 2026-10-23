@@ -4,9 +4,11 @@ import type { LibraryRepo } from '../db/repos'
 import type { DownloadManager } from './downloadManager'
 import type { CheckProgressEvent, CheckSummary } from '../../shared/types'
 import { isAuthError, BoothError } from '../booth/errors'
-import { createLogger } from '../util/log'
+import { createLogger, describeLink } from '../util/log'
 
 const log = createLogger('updateCheck')
+/** 单次检查结束时逐条列出的失败上限，超出部分只写数量 */
+const FAILURE_LIST_LIMIT = 50
 
 /**
  * 文件级更新检查（用户需求 #1，比官方更细：精确到每个下载链接）：
@@ -41,31 +43,36 @@ export class UpdateCheckService {
   async checkItem(itemId: number): Promise<CheckSummary> {
     // 免费商品不参与文件更新检查（作者限定免费，下载后即收费，不会进入用户库）
     if (this.repo.isFreeItem(itemId)) {
-      log.info(`item ${itemId} check skipped: free item`)
+      log.info(`item #${itemId} check skipped: free item`)
       return { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
     }
     const targets = this.repo.listDownloadablesOfItem(itemId)
-    log.info(`item ${itemId} file check start: ${targets.length} link(s)`)
+    const title = targets[0]?.itemTitle ?? ''
+    log.info(`item #${itemId}${title ? `「${title.slice(0, 40)}」` : ''} file check start: ${targets.length} link(s)`)
     const s = await this.checkMany(targets, `商品 ${itemId}`)
-    log.info(`item ${itemId} file check done: ${JSON.stringify(s)}`)
+    log.info(`item #${itemId} file check done: ${JSON.stringify(s)}`)
     return s
   }
 
   private async checkMany(
-    targets: Array<{ downloadableId: number; itemId: number; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath?: string | null }>,
+    targets: Array<{ downloadableId: number; itemId: number; itemTitle: string; filename: string; variationId: number | null; status: string; lastEtag: string | null; lastSize: number | null; localPath?: string | null }>,
     label: string
   ): Promise<CheckSummary> {
     if (this.running) throw new Error('检查已在进行中')
     this.running = true
     const summary: CheckSummary = { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
     const toDownload: number[] = []
+    const failures: string[] = []
     let consecutiveLimited = 0
     try {
       for (let i = 0; i < targets.length; i++) {
         const t = targets[i]
+        const desc = describeLink(t)
         this.onProgress?.({ phase: 'files', current: i + 1, total: targets.length, label: `${label} ${t.filename || t.downloadableId}` })
+        let stage: 'resolve' | 'probe' = 'resolve'
         try {
           const resolved = await this.deeplink.resolve(t.downloadableId, t.variationId)
+          stage = 'probe'
           const fp = await this.deeplink.probe(resolved.dlurl)
           summary.filesChecked++
           consecutiveLimited = 0
@@ -89,16 +96,20 @@ export class UpdateCheckService {
             this.repo.setStatus(t.downloadableId, 'update_available')
             summary.filesUpdated++
             toDownload.push(t.downloadableId)
-            log.info(`update: item=${t.itemId} file=${t.filename} ${t.lastSize}→${fp.size}`)
+            const reason = remoteChanged
+              ? `远端变化 ${etagChanged ? `etag ${t.lastEtag}→${fp.etag}` : ''}${sizeChanged ? ` size ${t.lastSize}→${fp.size}` : ''}`.trim()
+              : '本地文件缺失，需重新下载'
+            log.info(`update: ${desc} ${reason}`)
             // 老文件立即归档到历史（同名覆盖与改名 _V2 两种情况统一：历史里永远保留旧版本）
             if (remoteChanged) {
               try {
                 this.downloads.archiveCurrentFile(t.downloadableId)
               } catch (e) {
-                log.warn('archive old file failed:', e instanceof Error ? e.message : e)
+                log.warn(`archive old file failed: ${desc}:`, e instanceof Error ? e.message : e)
               }
             }
           } else if (!firstFingerprint) {
+
             // 指纹已知且未变：若已下载保持 downloaded，否则 remote
             const cur = this.repo.getDownloadable(t.downloadableId)
             if (cur?.status === 'update_available') {
@@ -119,22 +130,31 @@ export class UpdateCheckService {
           if (isAuthError(e)) throw e
           summary.failed++
           const msg = e instanceof Error ? e.message : String(e)
+          const status = e instanceof BoothError && e.status != null ? ` http=${e.status}` : ''
+          const failLine = `${desc} stage=${stage}${status} → ${msg}`
+          if (failures.length < FAILURE_LIST_LIMIT) failures.push(failLine)
           if (e instanceof BoothError && e.kind === 'not_found') {
             this.repo.setStatus(t.downloadableId, 'missing')
-            log.warn(`missing: ${t.downloadableId} ${t.filename}`)
+            log.warn(`missing: ${desc} stage=${stage}${status} → ${msg}`)
           } else if (e instanceof BoothError && e.kind === 'rate_limited') {
             // 被 BOOTH 限流：冷却 2s 再继续，连续 5 次熔断（避免雪崩式骚扰）
             consecutiveLimited++
-            log.warn(`rate limited (${consecutiveLimited}/5): ${msg}`)
+            log.warn(`rate limited (${consecutiveLimited}/5): ${failLine}`)
             if (consecutiveLimited >= 5) {
-              log.warn('too many rate limits, aborting check early (可稍后手动重试)')
+              const remaining = targets.length - i - 1
+              log.warn(`too many rate limits, aborting ${label} check early: stopped at ${desc}, ${remaining} link(s) not checked (可稍后手动重试)`)
               break
             }
             await new Promise((r) => setTimeout(r, 2000))
           } else {
-            log.warn(`check failed ${t.downloadableId}: ${msg}`)
+            log.warn(`check failed: ${failLine}`)
           }
         }
+      }
+
+      if (failures.length > 0) {
+        log.warn(`${label} failed links (${summary.failed}${summary.failed > failures.length ? `, 仅列出前 ${failures.length} 条` : ''}):`)
+        for (const line of failures) log.warn(`  - ${line}`)
       }
 
       // 自动下载检测到的更新
