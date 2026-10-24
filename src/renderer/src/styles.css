@@ -233,6 +233,7 @@ select {
   gap: 14px;
 }
 .card {
+  position: relative;
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -241,6 +242,21 @@ select {
   transition: border-color 0.15s, transform 0.15s;
   display: flex;
   flex-direction: column;
+}
+/* 封面左上角的 BOOTH 编号角标：半透明底色随主题的 --bg2 变化 */
+.card .booth-id-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg2) 72%, transparent);
+  border: 1px solid var(--border);
+  pointer-events: none;
 }
 .card:hover {
   border-color: var(--accent);
@@ -962,6 +978,77 @@ input.invalid {
 .filter-row .count {
   color: var(--text-dim);
   font-size: 13px;
+}
+/* 排序滑块：两段式，靠右；高亮块与其上白字同步平移，文字不会在原地变色 */
+.sort-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.sort-hint {
+  color: var(--text-dim);
+  font-size: 12px;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+.sort-slider {
+  position: relative;
+  width: 160px;
+  height: 28px;
+  flex-shrink: 0;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-sizing: border-box;
+}
+.sort-track {
+  position: absolute;
+  inset: 1px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.sort-track > button {
+  position: relative;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+.sort-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 50%;
+  overflow: hidden;
+  background: var(--accent);
+  border-radius: 12px;
+  pointer-events: none;
+  transition: transform 0.25s ease;
+}
+.sort-thumb-text {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  color: #fff;
+  font-size: 13px;
+  line-height: 26px;
+  text-align: center;
+  transition: transform 0.25s ease;
+  pointer-events: none;
+}
+.sort-slider[data-value='id'] .sort-thumb {
+  transform: translateX(100%);
+}
+.sort-slider[data-value='id'] .sort-thumb-text {
+  transform: translateX(-50%);
 }
 
 
