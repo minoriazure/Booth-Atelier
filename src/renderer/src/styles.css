@@ -226,6 +226,45 @@ select {
   padding: 16px;
 }
 
+/* ── 返回顶部 ── */
+/* 停靠层：高度为 0，sticky 于 .main 底边上方 16px；按钮向上绝对定位 */
+.back-to-top-dock {
+  position: sticky;
+  bottom: 16px;
+  height: 0;
+  z-index: 50;
+}
+.back-to-top {
+  position: absolute;
+  right: 24px;
+  bottom: 0;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s, background 0.15s, border-color 0.15s;
+}
+.back-to-top.visible {
+  opacity: 0.85;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.back-to-top.visible:hover {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 /* ── 图片墙 ── */
 .wall {
   display: grid;

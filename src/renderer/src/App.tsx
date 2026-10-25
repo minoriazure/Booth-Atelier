@@ -9,6 +9,7 @@ import SettingsPage from './pages/SettingsPage'
 import LogPage from './pages/LogPage'
 import AuthExpiredDialog from './components/AuthExpiredDialog'
 import DeepLinkHostDialog from './components/DeepLinkHostDialog'
+import BackToTop from './components/BackToTop'
 
 type Tab = 'library' | 'updates' | 'history' | 'settings' | 'log'
 
@@ -297,6 +298,7 @@ export default function App() {
           />
         )}
         {tab === 'log' && <LogPage />}
+        {tab === 'library' && <BackToTop />}
       </div>
 
       <div className="statusbar-stack">
