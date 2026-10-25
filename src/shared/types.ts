@@ -78,8 +78,8 @@ export interface ItemDetailRow extends ItemSummary {
   ogImageUrl: string | null
   descriptionHtml: string
   galleryUrls: string[]
-  /** 画廊图片的本地 media URL（已下载部分）；thumbMediaUrl = 缩略图（未生成时回退原图） */
-  localGallery: Array<{ url: string; mediaUrl: string | null; thumbMediaUrl: string | null }>
+  /** 画廊图片的本地 media URL（已下载部分）：mediaUrl = 原图（仅放大与回退）；previewMediaUrl = 720 长边预览（展示）；thumbMediaUrl = 360 缩略图（底层占位） */
+  localGallery: Array<{ url: string; mediaUrl: string | null; previewMediaUrl: string | null; thumbMediaUrl: string | null }>
   videos: ItemVideo[]
   downloadables: DownloadableFileRow[]
 }

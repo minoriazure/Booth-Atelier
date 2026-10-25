@@ -30,7 +30,7 @@ export class ImageLocalizer {
   private flushTimer: ReturnType<typeof setTimeout> | null = null
 
   /** 缩略图生成队列（本地 CPU 操作，2 并发防内存尖峰） */
-  private thumbQueue: Array<{ src: string; dest: string }> = []
+  private thumbQueue: Array<{ src: string; dest: string; preview: string }> = []
   private thumbRunning = 0
   private thumbWanted = new Set<string>()
 
@@ -222,8 +222,8 @@ export class ImageLocalizer {
     renameSync(tmp, dest)
     this.bufferStatus(row.url, 'done', buf.byteLength)
     log.debug(`done: #${row.itemId} ${row.filename} (${buf.byteLength}B)`)
-    // 原图落盘后顺手生成缩略图（thumb/ 与 images/ 平级）
-    this.enqueueThumb(dest, this.thumbPath(row.itemId, row.filename))
+    // 原图落盘后一次解码，同时生成 thumb/（360）与 preview/（长边 720）
+    this.enqueueDerivatives(dest, this.thumbPath(row.itemId, row.filename), this.previewPath(row.itemId, row.filename))
   }
 
 /** 缩略图本地路径（与 images 平级的 thumb/ 目录） */
@@ -233,9 +233,14 @@ export class ImageLocalizer {
     return join(this.paths.thumbsDir(itemId), `${base}.jpg`)
   }
 
+  /** 预览图本地路径（与 images 平级的 preview/ 目录，长边 720） */
+  previewPath(itemId: number, filename: string): string {
+    const base = filename.replace(/\.[^.]+$/, '')
+    return join(this.paths.previewsDir(itemId), `${base}.jpg`)
+  }
+
   /**
    * 解析缩略图：已生成返回 thumb；未生成则返回原图兜底并后台生成。
-   * 原图本身 ≤ 缩略图宽度时直接用原图（列表页 300x300 缩略图属于此类）。
    */
   resolveThumbLocal(url: string): string | null {
     const img = this.repo.getImage(url)
@@ -250,7 +255,20 @@ export class ImageLocalizer {
   }
 
   /**
-   * 启动后台补齐存量图片的缩略图。
+   * 解析展示用预览图（长边 720）：已生成返回 preview；未生成则回退原图。
+   */
+  resolvePreviewLocal(url: string): string | null {
+    const img = this.repo.getImage(url)
+    if (!img) return null
+    const orig = this.localPath(img.itemId, img.filename)
+    if (!existsSync(orig) || statSync(orig).size === 0) return null
+    const preview = this.previewPath(img.itemId, img.filename)
+    if (existsSync(preview) && statSync(preview).size > 0) return preview
+    return orig
+  }
+
+  /**
+   * 启动后台补齐存量图片的缩略图与预览图。
    * 逐张排队、单并发 + 每张间隔 250ms，让出主线程，不卡 UI。
    */
   startThumbBackfill(limit = 5000): void {
@@ -258,20 +276,23 @@ export class ImageLocalizer {
     const rows = this.repo.listDoneImages(limit)
     let queued = 0
     for (const r of rows) {
-      const thumb = this.thumbPath(r.itemId, r.filename)
-      if (existsSync(thumb) && statSync(thumb).size > 0) continue
-      const orig = this.localPath(r.itemId, r.filename)
-      if (!existsSync(orig)) continue
-      this.enqueueThumb(orig, thumb)
-      queued++
+    const thumb = this.thumbPath(r.itemId, r.filename)
+    const preview = this.previewPath(r.itemId, r.filename)
+    const thumbOk = existsSync(thumb) && statSync(thumb).size > 0
+    const previewOk = existsSync(preview) && statSync(preview).size > 0
+    if (thumbOk && previewOk) continue
+    const orig = this.localPath(r.itemId, r.filename)
+    if (!existsSync(orig)) continue
+    this.enqueueDerivatives(orig, thumb, preview)
+    queued++
     }
-    if (queued > 0) log.info(`thumb backfill queued: ${queued} (total scanned ${rows.length})`)
+    if (queued > 0) log.info(`derivative backfill queued: ${queued} (total scanned ${rows.length})`)
   }
 
-  private enqueueThumb(src: string, dest: string): void {
+  private enqueueDerivatives(src: string, dest: string, preview: string): void {
     if (this.thumbWanted.has(dest)) return
     this.thumbWanted.add(dest)
-    this.thumbQueue.push({ src, dest })
+    this.thumbQueue.push({ src, dest, preview })
     this.pumpThumbs()
   }
 
@@ -281,7 +302,7 @@ export class ImageLocalizer {
     this.thumbRunning++
     void (async () => {
       try {
-        generateThumb(job.src, job.dest)
+        generateDerivatives(job.src, job.dest, job.preview)
       } catch (e) {
         log.debug('thumb gen failed:', e instanceof Error ? e.message : e)
       } finally {
@@ -379,14 +400,19 @@ export function imageFilename(url: string): string {
   return `${hash}${ext}`
 }
 
-/** 缩略图目标宽度（画廊条 72px、retina 2x 富余） */
+/** 缩略图目标宽度（画廊条、详情页底层占位） */
 export const THUMB_WIDTH = 360
+/** 预览图目标长边（详情页展示、列表卡片、商品描述） */
+export const PREVIEW_LONG_EDGE = 720
 
 /**
- * 用 Electron nativeImage 生成 JPEG 缩略图（零依赖）。
+ * 用 Electron nativeImage 从原图一次解码，同时生成两层 JPEG（零依赖）：
+ * - thumb：宽 360
+ * - preview：长边 720
+ * 已存在的层跳过；原图本身更小时仅重新编码、不缩放。
  * 非 Electron 环境（验证脚本）直接跳过。
  */
-function generateThumb(src: string, dest: string): boolean {
+function generateDerivatives(src: string, thumbDest: string, previewDest: string): boolean {
   let nativeImage: typeof import('electron').nativeImage | undefined
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -395,20 +421,36 @@ function generateThumb(src: string, dest: string): boolean {
     return false
   }
   if (!nativeImage) return false
-  if (!existsSync(dest) || statSync(dest).size === 0) {
-    const img = nativeImage.createFromPath(src)
-    if (img.isEmpty()) return false
-    const size = img.getSize()
-    if (size.width <= THUMB_WIDTH) {
-      // 原图已经很小：转存 JPEG 即可（体积接近，直接跳过——resolveThumb 返回原图）
-      return false
-    }
-    mkdirSync(join(dest, '..'), { recursive: true })
-    const resized = img.resize({ width: THUMB_WIDTH, quality: 'better' })
-    const tmp = dest + '.tmp'
-    writeFileSync(tmp, resized.toJPEG(82))
-    renameSync(tmp, dest)
-    log.debug(`thumb: ${dest} (${size.width}→${THUMB_WIDTH}px)`)
+  const thumbMissing = !existsSync(thumbDest) || statSync(thumbDest).size === 0
+  const previewMissing = !existsSync(previewDest) || statSync(previewDest).size === 0
+  if (!thumbMissing && !previewMissing) return true
+
+  const img = nativeImage.createFromPath(src)
+  if (img.isEmpty()) return false
+  const { width, height } = img.getSize()
+  mkdirSync(join(thumbDest, '..'), { recursive: true })
+  mkdirSync(join(previewDest, '..'), { recursive: true })
+
+  if (thumbMissing) {
+    const out = width > THUMB_WIDTH ? img.resize({ width: THUMB_WIDTH, quality: 'better' }) : img
+    writeAtomic(thumbDest, out.toJPEG(82))
   }
+  if (previewMissing) {
+    const long = Math.max(width, height)
+    let out = img
+    if (long > PREVIEW_LONG_EDGE) {
+      out = width >= height
+        ? img.resize({ width: PREVIEW_LONG_EDGE, quality: 'better' })
+        : img.resize({ height: PREVIEW_LONG_EDGE, quality: 'better' })
+    }
+    writeAtomic(previewDest, out.toJPEG(82))
+  }
+  log.debug(`derivatives: ${thumbDest} / ${previewDest} (${width}x${height})`)
   return true
+}
+
+function writeAtomic(dest: string, data: Buffer): void {
+  const tmp = dest + '.tmp'
+  writeFileSync(tmp, data)
+  renameSync(tmp, dest)
 }

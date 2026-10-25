@@ -91,6 +91,11 @@ export class Paths {
     return join(this.itemDataDir(itemId), 'thumb')
   }
 
+  /** 720 长边预览图目录（展示层的清晰图源，与 thumb/ 平级） */
+  previewsDir(itemId: number): string {
+    return join(this.itemDataDir(itemId), 'preview')
+  }
+
   videosDir(itemId: number): string {
     return join(this.itemDataDir(itemId), 'videos')
   }
@@ -115,6 +120,7 @@ export class Paths {
   ensureItemDataDirs(itemId: number): void {
     this.ensureDir(this.imagesDir(itemId))
     this.ensureDir(this.thumbsDir(itemId))
+    this.ensureDir(this.previewsDir(itemId))
     this.ensureDir(this.videosDir(itemId))
     this.ensureDir(this.snapshotsDir(itemId))
   }

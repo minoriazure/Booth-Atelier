@@ -144,44 +144,85 @@ function Gallery({
   images,
   videos
 }: {
-  images: Array<{ url: string; mediaUrl: string | null; thumbMediaUrl: string | null }>
+  images: Array<{ url: string; mediaUrl: string | null; previewMediaUrl: string | null; thumbMediaUrl: string | null }>
   videos: ItemVideo[]
 }) {
-  // 画廊条目：图片（thumb 用于缩略图条）+ 已下载视频
+  // 画廊条目：图片（底层 thumb 360、清晰层 preview 720、放大用原图 orig）+ 已下载视频
   const slides = useMemo(() => {
     const imgs = images.map((g) => ({
       type: 'image' as const,
-      src: g.mediaUrl || g.url,
-      thumb: g.thumbMediaUrl || g.mediaUrl || g.url
+      src: g.previewMediaUrl || g.mediaUrl || g.url,
+      orig: g.mediaUrl || g.url,
+      thumb: g.thumbMediaUrl
     }))
     const vids = videos
       .filter((v) => v.status === 'downloaded' && v.localPath)
-      .map((v) => ({ type: 'video' as const, src: toMedia(v.localPath!), thumb: '', key: v.key }))
+      .map((v) => ({ type: 'video' as const, src: toMedia(v.localPath!), orig: null, thumb: null, key: v.key }))
     return [...imgs, ...vids]
   }, [images, videos])
 
   const [idx, setIdx] = useState(0)
   const [zoomSrc, setZoomSrc] = useState<string | null>(null)
+  // 首尾回绕时临时关闭过渡，避免轨道从末张反向滑过全部幻灯片
+  const [instant, setInstant] = useState(false)
   const stripRef = useRef<HTMLDivElement>(null)
   const thumbRefs = useRef<Array<HTMLDivElement | null>>([])
+  const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
 
   useEffect(() => {
     if (idx >= slides.length) setIdx(0)
   }, [slides.length, idx])
 
-  // 大图加载失败（远端图未本地化 + 网络差）→ 隐藏显示占位
+  // 离开视频幻灯片时暂停播放
+  useEffect(() => {
+    videoRefs.current.forEach((v, i) => {
+      if (v && i !== idx) v.pause()
+    })
+  }, [idx])
+
+  useEffect(() => {
+    if (!instant) return
+    const id = requestAnimationFrame(() => setInstant(false))
+    return () => cancelAnimationFrame(id)
+  }, [instant])
+
   const [broken, setBroken] = useState<Record<number, boolean>>({})
-  useEffect(() => setBroken({}), [slides])
+  // 清晰层（preview）是否已加载完成（用于淡入）；离开「当前 ± 1」窗口后剪枝
+  const [loaded, setLoaded] = useState<Record<number, boolean>>({})
+  useEffect(() => {
+    setBroken({})
+    setLoaded({})
+  }, [slides])
+
+  useEffect(() => {
+    setLoaded((prev) => {
+      const next: Record<number, boolean> = {}
+      for (const k of Object.keys(prev)) {
+        const i = Number(k)
+        const d = Math.abs(i - idx)
+        if (Math.min(d, slides.length - d) <= 1) next[i] = true
+      }
+      return next
+    })
+  }, [idx, slides.length])
 
   const go = (next: number): void => {
-    if (slides.length === 0) return
-    const n = ((next % slides.length) + slides.length) % slides.length
+    const len = slides.length
+    if (len === 0) return
+    const n = ((next % len) + len) % len
+    const wrapped = len > 2 && ((idx === len - 1 && n === 0) || (idx === 0 && n === len - 1))
+    if (wrapped) setInstant(true)
     setIdx(n)
     thumbRefs.current[n]?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
   }
 
   if (slides.length === 0) return null
-  const cur = slides[Math.min(idx, slides.length - 1)]
+
+  /** 与当前幻灯片的环形距离；仅相邻幻灯片挂载真实资源，其余不加载 */
+  const distance = (i: number): number => {
+    const d = Math.abs(i - idx)
+    return Math.min(d, slides.length - d)
+  }
 
   return (
     <div className="gallery2">
@@ -190,20 +231,49 @@ function Gallery({
           ‹
         </button>
         <div className="gallery2-image">
-          {cur.type === 'video' ? (
-            <video className="gallery2-video" src={cur.src} controls preload="metadata" />
-          ) : broken[idx] ? (
-            <div className="gallery2-placeholder">🖼 图片加载中…</div>
-          ) : (
-            <img
-              src={cur.src}
-              alt=""
-              className="zoomable"
-              title="点击放大查看"
-              onError={() => setBroken((b) => ({ ...b, [idx]: true }))}
-              onClick={() => setZoomSrc(cur.src)}
-            />
-          )}
+          <div
+            className={`gallery2-track${instant ? ' no-anim' : ''}`}
+            style={{ transform: `translateX(-${idx * 100}%)` }}
+          >
+            {slides.map((s, i) => {
+              const near = distance(i) <= 1
+              return (
+                <div key={i} className="gallery2-slide" aria-hidden={i !== idx}>
+                  {s.type === 'video' ? (
+                    near && (
+                      <video
+                        ref={(el) => {
+                          videoRefs.current[i] = el
+                        }}
+                        className="gallery2-video"
+                        src={s.src}
+                        controls
+                        preload="metadata"
+                      />
+                    )
+                  ) : broken[i] ? (
+                    <div className="gallery2-placeholder">🖼 图片加载中…</div>
+                  ) : (
+                    <div className="gallery2-img-box">
+                      {/* 底层：thumb 360 与清晰层同尺寸铺满，立即可见 */}
+                      {s.thumb && <img className="gallery2-underlay" src={s.thumb} alt="" />}
+                      {near && (
+                        <img
+                          className={`zoomable gallery2-full${loaded[i] ? ' loaded' : ''}`}
+                          src={s.src}
+                          alt=""
+                          title="点击放大查看"
+                          onLoad={() => setLoaded((l) => ({ ...l, [i]: true }))}
+                          onError={() => setBroken((b) => ({ ...b, [i]: true }))}
+                          onClick={() => loaded[i] && s.orig && setZoomSrc(s.orig)}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
         <button className="gallery2-nav next" onClick={() => go(idx + 1)} title="下一张" disabled={slides.length < 2}>
           ›
@@ -223,8 +293,8 @@ function Gallery({
               }}
               onClick={() => go(i)}
             >
-              {/* 缩略图条只加载压缩 thumb（未生成时后端回退原图，仍比全屏大图轻） */}
-              {s.type === 'video' ? <span className="thumb-video">▶</span> : <img src={s.thumb} loading="lazy" alt="" />}
+              {/* 缩略图条：thumb 360，缺失时回退 preview 720 */}
+              {s.type === 'video' ? <span className="thumb-video">▶</span> : <img src={s.thumb || s.src} loading="lazy" alt="" />}
             </div>
           ))}
         </div>
@@ -482,7 +552,7 @@ export default function ItemDetailPage({
     }
     const localImages: Record<string, string> = {}
     for (const g of item.localGallery) {
-      if (g.mediaUrl) localImages[g.url] = g.mediaUrl
+      if (g.previewMediaUrl) localImages[g.url] = g.previewMediaUrl
     }
     return buildBoothDescHtml(item.descriptionHtml, { localImages, videos: item.videos })
   }, [item, snapshot])
@@ -533,7 +603,7 @@ export default function ItemDetailPage({
 
   if (!item) return <div className="empty">加载商品…</div>
 
-  const galleryForShow = item.localGallery.length ? item.localGallery : (item.galleryUrls || []).map((u) => ({ url: u, mediaUrl: null, thumbMediaUrl: null }))
+  const galleryForShow = item.localGallery.length ? item.localGallery : (item.galleryUrls || []).map((u) => ({ url: u, mediaUrl: null, previewMediaUrl: null, thumbMediaUrl: null }))
   const videos = item.videos.map((v) => ({ ...v, ...(videoStates[v.key] || {}) }))
 
   return (

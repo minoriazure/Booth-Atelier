@@ -30,7 +30,7 @@ function localizeSnapshotImages(ctx: AppContext, itemId: number, html: string): 
   ctx.imageLocalizer.registerItemImages(itemId, Array.from(urls, (url) => ({ url, kind: 'desc' })))
   const map: Record<string, string> = {}
   for (const u of urls) {
-    const local = ctx.imageLocalizer.resolveLocalFor(itemId, u)
+    const local = ctx.imageLocalizer.resolvePreviewLocal(u)
     if (local) map[u] = mediaUrl(local)
   }
   return map
@@ -132,7 +132,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   ): Array<T & { localThumb: string | null }> =>
     rows.map((r) => ({
       ...r,
-      localThumb: r.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolveLocalFor(r.itemId, r.thumbnailUrl)) : null
+      localThumb: r.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolvePreviewLocal(r.thumbnailUrl)) : null
     }))
   handle('library:list', (query?: unknown) =>
     withLocalThumbs(typeof query === 'string' && query ? ctx.repo.search(query) : ctx.repo.listSummaries())
@@ -142,10 +142,11 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     const rid = id.parse(itemId)
     const detail = ctx.repo.getItemDetail(rid)
     if (!detail) return null
-    detail.localThumb = detail.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolveLocalFor(rid, detail.thumbnailUrl)) : null
+    detail.localThumb = detail.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolvePreviewLocal(detail.thumbnailUrl)) : null
     detail.localGallery = detail.galleryUrls.map((u) => ({
       url: u,
       mediaUrl: tryMedia(ctx.imageLocalizer.resolveLocalFor(rid, u)),
+      previewMediaUrl: tryMedia(ctx.imageLocalizer.resolvePreviewLocal(u)),
       thumbMediaUrl: tryMedia(ctx.imageLocalizer.resolveThumbLocal(u))
     }))
     ctx.videos.validateLocal(rid)
@@ -178,8 +179,8 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   })
   handle('library:imageUrl', (remoteUrl: unknown) => {
     const u = q.parse(remoteUrl)
-    // 商品图片本地化（images/ 原图；thumb/ 缩略图按需后台生成）
-    const local = ctx.imageLocalizer.resolveLocal(u)
+    // 列表卡片等展示位：preview/ 长边 720（未生成回退原图）
+    const local = ctx.imageLocalizer.resolvePreviewLocal(u)
     return local ? mediaUrl(local) : null
   })
 
