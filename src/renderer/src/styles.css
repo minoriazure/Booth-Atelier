@@ -1295,7 +1295,6 @@ button.danger-solid:hover:not(:disabled) {
   width: 100%;
 }
 .side-files {
-  max-height: calc(100vh - 320px);
   overflow-y: auto;
   display: flex;
   flex-direction: column;

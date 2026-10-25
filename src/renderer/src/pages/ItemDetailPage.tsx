@@ -488,6 +488,8 @@ export default function ItemDetailPage({
   }, [item, snapshot])
 
   // 渲染后把占位 div 替换成视频卡片：用 ref 收集 slot，React Portal 式渲染
+  const sideRef = useRef<HTMLElement>(null)
+  const sideFilesRef = useRef<HTMLDivElement>(null)
   const descRef = useRef<HTMLDivElement>(null)
   const [descRendered, setDescRendered] = useState(0)
   useEffect(() => {
@@ -511,6 +513,23 @@ export default function ItemDetailPage({
       })
     })
   }, [processedDesc, videoStates, item, descRendered])
+
+  // 让右侧文件列表恰好适配滚动区可视高度（状态栏行数变化时同步更新）
+  useEffect(() => {
+    const aside = sideRef.current
+    const list = sideFilesRef.current
+    const main = aside?.closest<HTMLElement>('.main')
+    if (!aside || !list || !main) return
+    const fit = () => {
+      const chrome = aside.offsetHeight - list.offsetHeight
+      list.style.maxHeight = `${Math.max(160, main.clientHeight - 24 - chrome)}px`
+    }
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(main)
+    ro.observe(aside)
+    return () => ro.disconnect()
+  }, [item])
 
   if (!item) return <div className="empty">加载商品…</div>
 
@@ -595,7 +614,7 @@ export default function ItemDetailPage({
         </div>
 
         {/* ── 右列：文件下载管理侧栏 ── */}
-        <aside className="detail2-side">
+        <aside className="detail2-side" ref={sideRef}>
           <button
             className="history-jump-btn"
             disabled={fileGroups.length === 0}
@@ -629,7 +648,7 @@ export default function ItemDetailPage({
               </button>
             </div>
 
-            <div className="side-files">
+            <div className="side-files" ref={sideFilesRef}>
               {item.downloadables.map((f) => (
                 <div className="side-file" key={f.downloadableId}>
                   <div className="side-file-name" title={f.filename}>{f.filename}</div>
