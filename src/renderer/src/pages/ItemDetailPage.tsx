@@ -407,9 +407,24 @@ export default function ItemDetailPage({
     setDescSnapId(null)
   }, [itemId])
 
-  // 打开详情即登记图片（后台补下，不阻塞）
+  // 打开详情即登记图片（后台补下，不阻塞）并优先生成该商品的派生图
   useEffect(() => {
     void api.images.enqueueItem(itemId).catch(() => {})
+    void api.images.prioritize([itemId]).catch(() => {})
+  }, [itemId])
+
+  // 单品图片检查（本地核对）：发现缺失时提示已开始补齐
+  const toastRef = useRef(toast)
+  toastRef.current = toast
+  useEffect(() => {
+    void api.images
+      .checkItem(itemId)
+      .then((r) => {
+        if (r.redownload > 0 || r.derivMissing > 0) {
+          toastRef.current('info', `该商品缺失 ${r.derivMissing} 张派生图、${r.redownload} 张原图，已开始补齐`)
+        }
+      })
+      .catch(() => {})
   }, [itemId])
 
   // 图片就绪 → 刷新本地画廊映射与历史快照图片

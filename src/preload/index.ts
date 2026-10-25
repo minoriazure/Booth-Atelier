@@ -18,6 +18,9 @@ import type {
   SnapshotDetail,
   ItemVideo,
   ImageProgress,
+  ReconcileProgress,
+  ReconcileResult,
+  DerivativeProgress,
   DeepLinkHostPrompt,
   ProxyTestResult,
   LogDayInfo,
@@ -101,6 +104,10 @@ export interface BoothAPI {
   }
   images: {
     enqueueItem(itemId: number): Promise<number>
+    prioritize(itemIds: number[]): Promise<number>
+    repair(): Promise<{ resetCount: number; checked: number; redownload: number; derivMarked: number }>
+    /** 商品详情页单品检查：本地核对，发现缺失即自动补齐 */
+    checkItem(itemId: number): Promise<ReconcileResult>
   }
   videos: {
     checkYtDlp(invalidate?: boolean): Promise<{ found: boolean; path: string | null }>
@@ -137,6 +144,8 @@ export interface BoothAPI {
     onToast(cb: (e: { level: 'info' | 'warn' | 'error'; message: string }) => void): () => void
     onImageReady(cb: (e: { itemId: number; url: string }) => void): () => void
     onImageProgress(cb: (e: ImageProgress) => void): () => void
+    onDerivativeProgress(cb: (e: DerivativeProgress) => void): () => void
+    onReconcileProgress(cb: (e: ReconcileProgress) => void): () => void
     onVideoProgress(cb: (e: VideoProgressEvent) => void): () => void
   }
 }
@@ -204,7 +213,10 @@ const api: BoothAPI = {
     cookiesPath: () => ipcRenderer.invoke('auth:cookiesPath')
   },
   images: {
-    enqueueItem: (itemId) => ipcRenderer.invoke('images:enqueueItem', itemId)
+    enqueueItem: (itemId) => ipcRenderer.invoke('images:enqueueItem', itemId),
+    prioritize: (itemIds) => ipcRenderer.invoke('images:prioritize', itemIds),
+    checkItem: (itemId) => ipcRenderer.invoke('images:checkItem', itemId),
+    repair: () => ipcRenderer.invoke('images:repair')
   },
   videos: {
     checkYtDlp: (invalidate) => ipcRenderer.invoke('videos:checkYtDlp', invalidate ?? false),
@@ -236,6 +248,8 @@ const api: BoothAPI = {
     onToast: (cb) => subscribe('event:toast', cb),
     onImageReady: (cb) => subscribe('event:imageReady', cb),
     onImageProgress: (cb) => subscribe('event:imageProgress', cb),
+    onDerivativeProgress: (cb) => subscribe('event:derivativeProgress', cb),
+    onReconcileProgress: (cb) => subscribe('event:reconcileProgress', cb),
     onVideoProgress: (cb) => subscribe('event:videoProgress', cb)
   }
 }

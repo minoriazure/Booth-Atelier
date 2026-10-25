@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { CheckProgressEvent, CheckSummary, DeepLinkHostPrompt, Settings } from '../../shared/types'
+import type { CheckProgressEvent, CheckSummary, DeepLinkHostPrompt, ReconcileProgress, Settings } from '../../shared/types'
 import { api } from './api'
 import LibraryWallPage from './pages/LibraryWallPage'
 import ItemDetailPage from './pages/ItemDetailPage'
@@ -38,6 +38,8 @@ export default function App() {
   /** 最近一次完成的确认（底栏最下行，状态确认用） */
   const [lastCompleted, setLastCompleted] = useState<string | null>(null)
   const [imgProgress, setImgProgress] = useState<{ done: number; total: number; active: number; queued: number } | null>(null)
+  const [derivProgress, setDerivProgress] = useState<{ done: number; total: number; failed: number } | null>(null)
+  const [reconcileProgress, setReconcileProgress] = useState<ReconcileProgress | null>(null)
   /** 深链宿主自检弹窗（指向其它副本时询问，独立于 cookies） */
   const [hostPrompt, setHostPrompt] = useState<DeepLinkHostPrompt | null>(null)
 
@@ -155,6 +157,18 @@ export default function App() {
           }
           return e
         })
+      }),
+      api.events.onDerivativeProgress((e) => {
+        setDerivProgress((prev) => {
+          if (prev && prev.total > 0 && prev.done < prev.total && e.total > 0 && e.done >= e.total) {
+            setLastCompleted(`✓ 缩略图 ${e.total} 张已生成${e.failed > 0 ? `（失败 ${e.failed}）` : ''}`)
+          }
+          return e
+        })
+      }),
+      api.events.onReconcileProgress((e) => {
+        setReconcileProgress(e.done ? null : e)
+        if (e.done) setLastCompleted(`✓ 图片检查完成（${e.checked} 张）`)
       })
     ]
     return () => unsubs.forEach((u) => u())
@@ -329,6 +343,28 @@ export default function App() {
             </div>
             <span className="status-num">
               {imgProgress.done}/{imgProgress.total}
+            </span>
+          </div>
+        )}
+        {derivProgress && derivProgress.total > 0 && derivProgress.done < derivProgress.total && (
+          <div className="status-line active">
+            <span className="status-label">🧩 缩略图生成</span>
+            <div className="progressbar img-progress">
+              <div style={{ width: `${Math.min(100, (derivProgress.done / derivProgress.total) * 100)}%` }} />
+            </div>
+            <span className="status-num">
+              {derivProgress.done}/{derivProgress.total}
+            </span>
+          </div>
+        )}
+        {reconcileProgress && reconcileProgress.total > 0 && reconcileProgress.checked < reconcileProgress.total && (
+          <div className="status-line active">
+            <span className="status-label">🔍 检查图片</span>
+            <div className="progressbar img-progress">
+              <div style={{ width: `${Math.min(100, (reconcileProgress.checked / reconcileProgress.total) * 100)}%` }} />
+            </div>
+            <span className="status-num">
+              {reconcileProgress.checked}/{reconcileProgress.total}
             </span>
           </div>
         )}

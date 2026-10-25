@@ -98,6 +98,22 @@ export class Db {
       this.markDirty()
       log.info('migrations applied: 007_items_is_free')
     }
+    if (Number(version) < 8) {
+      // 派生图（缩略图/预览图）生成失败次数：达到上限后不再自动重试，手动修复时清零
+      this.db.run(`ALTER TABLE item_images ADD COLUMN derivative_attempts INTEGER NOT NULL DEFAULT 0`)
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (8, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 008_derivative_attempts')
+    }
+    if (Number(version) < 9) {
+      // 派生图状态持久化：启动回填只查状态而不逐个 stat；unknown 表示尚未核实
+      this.db.run(`ALTER TABLE item_images ADD COLUMN thumb_status TEXT NOT NULL DEFAULT 'unknown'`)
+      this.db.run(`ALTER TABLE item_images ADD COLUMN preview_status TEXT NOT NULL DEFAULT 'unknown'`)
+      this.db.run(`ALTER TABLE item_images ADD COLUMN derivative_error TEXT`)
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (9, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 009_derivative_status')
+    }
   }
 
   exec(sql: string): void {

@@ -1,13 +1,34 @@
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync, statSync, writeFileSync, renameSync } from 'fs'
-import { join, extname } from 'path'
-import type { ImageProgress } from '../../shared/types'
+import { join, extname, basename } from 'path'
+import sharp from 'sharp'
+import type { ImageProgress, DerivativeProgress, ReconcileProgress, ReconcileResult } from '../../shared/types'
 import type { HttpClient } from '../booth/httpClient'
-import type { LibraryRepo } from '../db/repos'
+import type { LibraryRepo, ImageRef, DerivStatus } from '../db/repos'
 import type { Paths } from '../util/paths'
 import { createLogger } from '../util/log'
 
 const log = createLogger('imageLocalizer')
+
+/** 派生图生成任务：src 原图 → dest 缩略图 / preview 预览图 */
+interface DerivativeJob {
+  url: string
+  itemId: number
+  kind: string
+  filename: string
+  src: string
+  dest: string
+  preview: string
+}
+
+/** 原图不存在（被手动删除等）：不计入派生图失败，改为重新下载 */
+class MissingOriginalError extends Error {}
+
+/** 派生图补齐按游标分页读取的批大小，队列低于水位线才续读 */
+const DERIV_PAGE = 200
+const DERIV_LOW_WATER = 20
+/** 一次对账中原图缺失超过该数量时打 warn，便于排查误删目录等情况 */
+const BULK_REDOWNLOAD_WARN = 100
 
 /**
  * 商品图片本地化（用户需求 #3）：
@@ -29,10 +50,23 @@ export class ImageLocalizer {
   private statusBuf = new Map<string, { status: 'done' | 'failed'; bytes?: number }>()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
 
-  /** 缩略图生成队列（本地 CPU 操作，2 并发防内存尖峰） */
-  private thumbQueue: Array<{ src: string; dest: string; preview: string }> = []
+  /** 派生图（缩略图/预览图）生成队列：sharp 异步执行于 libvips 线程池，单并发即可不卡主线程 */
+  private thumbQueue: DerivativeJob[] = []
   private thumbRunning = 0
   private thumbWanted = new Set<string>()
+  /** 派生图候选的分页游标（rowid），队列低于水位线才续读，避免一次性灌入全库 */
+  private derivCursor = 0
+  private derivFeederDone = false
+  /** 派生结果状态写缓冲（与下载状态分开，批量刷入） */
+  private derivBuf: Array<{ url: string; ok: boolean; error?: string }> = []
+  private derivFlushTimer: ReturnType<typeof setTimeout> | null = null
+  /** 当前批次派生图进度（队列清空后归零） */
+  private derivTotal = 0
+  private derivOk = 0
+  private derivFailed = 0
+  private derivLastAt = 0
+  private derivStartedAt = 0
+  private derivTimer: ReturnType<typeof setTimeout> | null = null
 
   /** 一张图完成时触发（UI 刷新该商品） */
   onImageDone: ((itemId: number, url: string) => void) | null = null
@@ -40,6 +74,10 @@ export class ImageLocalizer {
   onIdle: (() => void) | null = null
   /** 进度（本会话累计，节流 ~500ms 上报） */
   onProgress: ((e: ImageProgress) => void) | null = null
+  /** 派生图生成进度（当前批次，节流 ~500ms 上报） */
+  onDerivativeProgress: ((e: DerivativeProgress) => void) | null = null
+  /** 图片对账进度（每页上报一次，结束时 done=true） */
+  onReconcileProgress: ((e: ReconcileProgress) => void) | null = null
 
   /** 本会话图片下载进度 */
   private progressDone = 0
@@ -205,7 +243,7 @@ export class ImageLocalizer {
     }
   }
 
-  private async downloadOne(row: { url: string; itemId: number; filename: string }): Promise<void> {
+  private async downloadOne(row: { url: string; itemId: number; kind: string; filename: string }): Promise<void> {
     const dest = this.localPath(row.itemId, row.filename)
     if (existsSync(dest) && statSync(dest).size > 0) return
     mkdirSync(join(dest, '..'), { recursive: true })
@@ -222,8 +260,16 @@ export class ImageLocalizer {
     renameSync(tmp, dest)
     this.bufferStatus(row.url, 'done', buf.byteLength)
     log.debug(`done: #${row.itemId} ${row.filename} (${buf.byteLength}B)`)
-    // 原图落盘后一次解码，同时生成 thumb/（360）与 preview/（长边 720）
-    this.enqueueDerivatives(dest, this.thumbPath(row.itemId, row.filename), this.previewPath(row.itemId, row.filename))
+    // 原图落盘后异步生成 thumb/（360）与 preview/（长边 720）
+    this.enqueueDerivatives({
+      url: row.url,
+      itemId: row.itemId,
+      kind: row.kind,
+      filename: row.filename,
+      src: dest,
+      dest: this.thumbPath(row.itemId, row.filename),
+      preview: this.previewPath(row.itemId, row.filename)
+    })
   }
 
 /** 缩略图本地路径（与 images 平级的 thumb/ 目录） */
@@ -268,53 +314,282 @@ export class ImageLocalizer {
   }
 
   /**
-   * 启动后台补齐存量图片的缩略图与预览图。
-   * 逐张排队、单并发 + 每张间隔 250ms，让出主线程，不卡 UI。
+   * 启动后台补齐（不再全量扫盘）：从 rowid=0 开始按页读取派生图候选（依据持久化的派生状态），
+   * 队列低于水位线才续读。原图是否缺失在执行任务时才发现（见 MissingOriginalError）。
    */
-  startThumbBackfill(limit = 5000): void {
+  startThumbBackfill(): void {
     if (this.disposed) return
-    const rows = this.repo.listDoneImages(limit)
+    this.derivCursor = 0
+    this.derivFeederDone = false
+    this.feedDerivatives()
+  }
+
+  /** 按需续读一页派生图候选入队；队列未降到水位线以下或已读完则直接返回 */
+  private feedDerivatives(): void {
+    if (this.disposed || this.derivFeederDone || this.thumbQueue.length >= DERIV_LOW_WATER) return
+    // 先刷新未落库的派生结果，避免刚完成的行被再次读出
+    this.flushDerivStatus()
+    const rows = this.repo.listDerivativeCandidates(this.derivCursor, DERIV_PAGE)
+    if (rows.length === 0) {
+      this.derivFeederDone = true
+      return
+    }
+    this.derivCursor = rows[rows.length - 1].rid
     let queued = 0
     for (const r of rows) {
-    const thumb = this.thumbPath(r.itemId, r.filename)
-    const preview = this.previewPath(r.itemId, r.filename)
-    const thumbOk = existsSync(thumb) && statSync(thumb).size > 0
-    const previewOk = existsSync(preview) && statSync(preview).size > 0
-    if (thumbOk && previewOk) continue
-    const orig = this.localPath(r.itemId, r.filename)
-    if (!existsSync(orig)) continue
-    this.enqueueDerivatives(orig, thumb, preview)
-    queued++
+      if (this.addDerivJob(this.jobFromRef(r), false)) queued++
     }
-    if (queued > 0) log.info(`derivative backfill queued: ${queued} (total scanned ${rows.length})`)
+    log.info(`backfill: fed ${queued} derivative jobs (page ${rows.length}, cursor ${this.derivCursor})`)
+    if (rows.length < DERIV_PAGE) this.derivFeederDone = true
   }
 
-  private enqueueDerivatives(src: string, dest: string, preview: string): void {
-    if (this.thumbWanted.has(dest)) return
-    this.thumbWanted.add(dest)
-    this.thumbQueue.push({ src, dest, preview })
+  private jobFromRef(r: ImageRef): DerivativeJob {
+    return {
+      url: r.url,
+      itemId: r.itemId,
+      kind: r.kind,
+      filename: r.filename,
+      src: this.localPath(r.itemId, r.filename),
+      dest: this.thumbPath(r.itemId, r.filename),
+      preview: this.previewPath(r.itemId, r.filename)
+    }
+  }
+
+  /** 下载完成后的派生图任务入队（队尾） */
+  private enqueueDerivatives(job: DerivativeJob): void {
+    this.addDerivJob(job, false)
+  }
+
+  /** 入队派生任务（dest 去重）；atFront 用于可见卡片优先。返回是否真正入队 */
+  private addDerivJob(job: DerivativeJob, atFront: boolean): boolean {
+    if (this.disposed || this.thumbWanted.has(job.dest)) return false
+    this.thumbWanted.add(job.dest)
+    if (atFront) this.thumbQueue.unshift(job)
+    else this.thumbQueue.push(job)
+    if (this.derivTotal === 0) this.derivStartedAt = Date.now()
+    this.derivTotal++
+    this.emitDerivProgress()
     this.pumpThumbs()
+    return true
   }
 
+  /**
+   * 可见商品优先：把该商品的派生图候选提到队首（已在队列中的前移，未入队的插入队首）。
+   * 由渲染层进入可视区/打开详情时调用。
+   */
+  prioritizeItem(itemId: number): void {
+    if (this.disposed) return
+    const rows = this.repo.listDerivativeCandidatesByItem(itemId)
+    for (const r of rows) {
+      const job = this.jobFromRef(r)
+      const idx = this.thumbQueue.findIndex((q) => q.dest === job.dest)
+      if (idx > 0) {
+        const [hit] = this.thumbQueue.splice(idx, 1)
+        this.thumbQueue.unshift(hit)
+      } else if (idx < 0) {
+        this.addDerivJob(job, true)
+      }
+    }
+  }
+
+  /** 单并发执行派生图任务；sharp 在 libvips 线程池异步运行不占主线程，任务间用 setImmediate 让出事件循环 */
   private pumpThumbs(): void {
     if (this.disposed || this.thumbRunning > 0 || this.thumbQueue.length === 0) return
     const job = this.thumbQueue.shift()!
     this.thumbRunning++
-    void (async () => {
-      try {
-        generateDerivatives(job.src, job.dest, job.preview)
-      } catch (e) {
-        log.debug('thumb gen failed:', e instanceof Error ? e.message : e)
-      } finally {
+    void this.runDerivJob(job)
+      .then(() => {
+        this.derivOk++
+        this.bufferDerivResult(job.url, true)
+      })
+      .catch((e) => {
+        if (e instanceof MissingOriginalError) {
+          this.recoverMissingOriginal(job)
+          return
+        }
+        this.derivFailed++
+        const msg = e instanceof Error ? e.message : String(e)
+        log.warn(`thumbnail fail #${job.itemId}/${basename(job.src)}: ${msg}`)
+        this.bufferDerivResult(job.url, false, msg)
+      })
+      .finally(() => {
         this.thumbRunning--
-        // 单张 nativeImage 操作会同步占用主线程 ~200ms，
-        // 任务间强制留 250ms 空隙让 UI/IPC 处理，绝不连发卡死
+        this.thumbWanted.delete(job.dest)
+        this.emitDerivProgress()
+        if (this.thumbQueue.length < DERIV_LOW_WATER) this.feedDerivatives()
         if (this.thumbQueue.length > 0 && !this.disposed) {
-          const t = setTimeout(() => this.pumpThumbs(), 250)
-          t.unref?.()
+          setImmediate(() => this.pumpThumbs())
+        } else if (this.thumbRunning === 0) {
+          this.flushDerivStatus()
+          this.finishDerivBatch()
+        }
+      })
+  }
+
+  private async runDerivJob(job: DerivativeJob): Promise<void> {
+    if (!fileOk(job.src)) throw new MissingOriginalError(job.src)
+    await generateDerivatives(job.src, job.dest, job.preview)
+  }
+
+  /** 原图被删：退回待下载，下载完成会再次生成派生图（不计为派生失败） */
+  private recoverMissingOriginal(job: DerivativeJob): void {
+    this.derivTotal = Math.max(0, this.derivTotal - 1)
+    try {
+      this.repo.markImagePending(job.url)
+      this.repo.setDerivativeStatus(job.url, 'unknown', 'unknown')
+    } catch {
+      return
+    }
+    this.failCount.delete(job.url)
+    log.info(`original missing, re-download #${job.itemId}/${job.filename}`)
+    this.enqueue({ url: job.url, itemId: job.itemId, kind: job.kind, filename: job.filename }, 0)
+  }
+
+  /** 派生结果缓冲：30 条或 3 秒批量落库 */
+  private bufferDerivResult(url: string, ok: boolean, error?: string): void {
+    if (this.disposed) return
+    this.derivBuf.push({ url, ok, error })
+    if (this.derivBuf.length >= 30) {
+      this.flushDerivStatus()
+      return
+    }
+    if (!this.derivFlushTimer) {
+      this.derivFlushTimer = setTimeout(() => {
+        this.derivFlushTimer = null
+        this.flushDerivStatus()
+      }, 3000)
+      this.derivFlushTimer.unref?.()
+    }
+  }
+
+  private flushDerivStatus(): void {
+    if (this.derivFlushTimer) {
+      clearTimeout(this.derivFlushTimer)
+      this.derivFlushTimer = null
+    }
+    if (this.derivBuf.length === 0) return
+    const entries = this.derivBuf.splice(0)
+    try {
+      this.repo.transaction(() => {
+        for (const e of entries) {
+          if (e.ok) this.repo.markDerivativeOk(e.url)
+          else this.repo.markDerivativeFailed(e.url, e.error ?? 'unknown')
+        }
+      })
+    } catch (e) {
+      log.debug('derivative status flush skipped:', e instanceof Error ? e.message : e)
+    }
+  }
+
+  /**
+   * 对账（库同步后调用，与 localFileReconciler 思路一致）：
+   * 分页核对已完成行的原图与派生图文件是否与 DB 状态一致；原图缺失则重新下载，
+   * 派生图缺失则标记为未就绪并重新入队。按页让出事件循环，根目录不存在时跳过。
+   */
+  async reconcileImages(scope?: { itemId: number }): Promise<ReconcileResult> {
+    const result: ReconcileResult = { checked: 0, redownload: 0, derivMarked: 0, derivMissing: 0 }
+    if (this.disposed) return result
+    if (!existsSync(this.paths.rootPath)) {
+      log.warn('reconcileImages skipped: library root missing')
+      return result
+    }
+    const itemId = scope?.itemId
+    const total = this.repo.countDoneImages(itemId)
+    this.flushStatus()
+    this.flushDerivStatus()
+    let afterRowid = 0
+    for (;;) {
+      const page = this.repo.listDoneImagePage(afterRowid, 500, itemId)
+      if (page.length === 0) break
+      afterRowid = page[page.length - 1].rid
+      for (const r of page) {
+        result.checked++
+        const orig = this.localPath(r.itemId, r.filename)
+        if (!fileOk(orig)) {
+          this.repo.markImagePending(r.url)
+          this.repo.setDerivativeStatus(r.url, 'unknown', 'unknown')
+          this.failCount.delete(r.url)
+          this.enqueue({ url: r.url, itemId: r.itemId, kind: r.kind, filename: r.filename }, 0)
+          result.redownload++
+          log.warn(`original missing, re-download: #${r.itemId} ${r.filename}`)
+          continue
+        }
+        const thumbStatus: DerivStatus = fileOk(this.thumbPath(r.itemId, r.filename)) ? 'ok' : 'missing'
+        const previewStatus: DerivStatus = fileOk(this.previewPath(r.itemId, r.filename)) ? 'ok' : 'missing'
+        if (thumbStatus === 'missing' || previewStatus === 'missing') result.derivMissing++
+        if (thumbStatus !== r.thumbStatus || previewStatus !== r.previewStatus) {
+          this.repo.setDerivativeStatus(r.url, thumbStatus, previewStatus)
+          result.derivMarked++
         }
       }
-    })()
+      this.onReconcileProgress?.({ checked: result.checked, total, done: false })
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    this.onReconcileProgress?.({ checked: result.checked, total, done: true })
+    if (result.redownload > BULK_REDOWNLOAD_WARN) {
+      log.warn(`reconcile: ${result.redownload} original images missing, bulk re-download queued`)
+    }
+    if (result.derivMarked > 0 || result.redownload > 0) {
+      // 有派生状态变化：重新从头续读候选
+      this.startThumbBackfill()
+    }
+    const scopeLabel = itemId !== undefined ? `item #${itemId}` : 'library'
+    log.info(
+      `image reconcile (${scopeLabel}): checked ${result.checked}, redownload ${result.redownload}, derivative marked ${result.derivMarked}, derivative missing ${result.derivMissing}`
+    )
+    return result
+  }
+
+  /**
+   * 商品详情页单品检查：只核对该商品的已完成记录（纯本地 stat），
+   * 原图缺失自动重下，派生图缺失标记后优先补齐。
+   */
+  async checkItem(itemId: number): Promise<ReconcileResult> {
+    const r = await this.reconcileImages({ itemId })
+    if (r.derivMissing > 0 || r.redownload > 0) {
+      this.prioritizeItem(itemId)
+    }
+    return r
+  }
+
+  /** 手动修复：清零派生失败计数后做一次完整对账并重新补齐 */
+  async repairDerivatives(): Promise<ReconcileResult & { reset: number }> {
+    const reset = this.repo.resetDerivativeAttempts()
+    const r = await this.reconcileImages()
+    this.startThumbBackfill()
+    return { reset, ...r }
+  }
+
+  private finishDerivBatch(): void {
+    if (this.derivTotal === 0) return
+    const ms = Date.now() - this.derivStartedAt
+    log.info(`thumbnail batch done: ok ${this.derivOk}, failed ${this.derivFailed}, total ${this.derivTotal}, ${ms}ms`)
+    this.emitDerivProgress(true)
+    this.derivTotal = 0
+    this.derivOk = 0
+    this.derivFailed = 0
+  }
+
+  /** 派生图进度上报：节流 500ms，末尾强制补发一次 */
+  private emitDerivProgress(force = false): void {
+    if (!this.onDerivativeProgress) return
+    const now = Date.now()
+    if (!force && now - this.derivLastAt < 500) {
+      if (!this.derivTimer) {
+        this.derivTimer = setTimeout(() => {
+          this.derivTimer = null
+          this.emitDerivProgress(true)
+        }, 500)
+        this.derivTimer.unref?.()
+      }
+      return
+    }
+    this.derivLastAt = now
+    this.onDerivativeProgress({
+      done: this.derivOk + this.derivFailed,
+      total: this.derivTotal,
+      failed: this.derivFailed
+    })
   }
 
   /** 本地文件绝对路径 */
@@ -378,11 +653,17 @@ export class ImageLocalizer {
       clearTimeout(this.progressTimer)
       this.progressTimer = null
     }
+    if (this.derivTimer) {
+      clearTimeout(this.derivTimer)
+      this.derivTimer = null
+    }
     this.paused = true
     this.queue.length = 0
+    this.thumbQueue.length = 0
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.flushTimer = null
     this.flushStatus()
+    this.flushDerivStatus()
   }
 }
 
@@ -406,48 +687,42 @@ export const THUMB_WIDTH = 360
 export const PREVIEW_LONG_EDGE = 720
 
 /**
- * 用 Electron nativeImage 从原图一次解码，同时生成两层 JPEG（零依赖）：
- * - thumb：宽 360
- * - preview：长边 720
- * 已存在的层跳过；原图本身更小时仅重新编码、不缩放。
- * 非 Electron 环境（验证脚本）直接跳过。
+ * 用 sharp 从原图生成两层 JPEG（异步，libvips 线程池执行）：
+ * - thumb：宽 360（不放大）
+ * - preview：长边 720（不放大）
+ * 已存在的层跳过；按 EXIF 方向旋转；透明通道压平为白底。
+ * 支持 jpg/png/webp/gif/avif（nativeImage 不支持后三者）。
  */
-function generateDerivatives(src: string, thumbDest: string, previewDest: string): boolean {
-  let nativeImage: typeof import('electron').nativeImage | undefined
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    nativeImage = require('electron')?.nativeImage
-  } catch {
-    return false
-  }
-  if (!nativeImage) return false
-  const thumbMissing = !existsSync(thumbDest) || statSync(thumbDest).size === 0
-  const previewMissing = !existsSync(previewDest) || statSync(previewDest).size === 0
-  if (!thumbMissing && !previewMissing) return true
-
-  const img = nativeImage.createFromPath(src)
-  if (img.isEmpty()) return false
-  const { width, height } = img.getSize()
+async function generateDerivatives(src: string, thumbDest: string, previewDest: string): Promise<void> {
+  const thumbMissing = !fileOk(thumbDest)
+  const previewMissing = !fileOk(previewDest)
+  if (!thumbMissing && !previewMissing) return
   mkdirSync(join(thumbDest, '..'), { recursive: true })
   mkdirSync(join(previewDest, '..'), { recursive: true })
 
+  const base = sharp(src).rotate().flatten({ background: '#ffffff' })
   if (thumbMissing) {
-    const out = width > THUMB_WIDTH ? img.resize({ width: THUMB_WIDTH, quality: 'better' }) : img
-    writeAtomic(thumbDest, out.toJPEG(82))
+    const buf = await base
+      .clone()
+      .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer()
+    writeAtomic(thumbDest, buf)
   }
   if (previewMissing) {
-    const long = Math.max(width, height)
-    let out = img
-    if (long > PREVIEW_LONG_EDGE) {
-      out = width >= height
-        ? img.resize({ width: PREVIEW_LONG_EDGE, quality: 'better' })
-        : img.resize({ height: PREVIEW_LONG_EDGE, quality: 'better' })
-    }
-    writeAtomic(previewDest, out.toJPEG(82))
+    const buf = await base
+      .clone()
+      .resize({ width: PREVIEW_LONG_EDGE, height: PREVIEW_LONG_EDGE, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer()
+    writeAtomic(previewDest, buf)
   }
-  log.debug(`derivatives: ${thumbDest} / ${previewDest} (${width}x${height})`)
-  return true
 }
+
+function fileOk(p: string): boolean {
+  return existsSync(p) && statSync(p).size > 0
+}
+
 
 function writeAtomic(dest: string, data: Buffer): void {
   const tmp = dest + '.tmp'

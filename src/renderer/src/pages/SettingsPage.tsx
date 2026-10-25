@@ -17,6 +17,7 @@ export default function SettingsPage({
   onAuthCheck: () => void
 }) {
   const [saving, setSaving] = useState(false)
+  const [repairing, setRepairing] = useState(false)
   const [proxyInfo, setProxyInfo] = useState<string | null>(null)
   const [customProxyInput, setCustomProxyInput] = useState(settings.customProxy)
   /** 代理模式草稿：选「自定义」后需保存地址才会生效，系统/直连选中即生效 */
@@ -147,6 +148,28 @@ export default function SettingsPage({
             </div>
           )}
         </div>
+        <div className="setting-row">
+          <div className="label">图片修复</div>
+          <div className="value">
+            <button
+              disabled={repairing}
+              onClick={() => {
+                setRepairing(true)
+                api.images
+                  .repair()
+                  .then((r) => toast('info', `已开始检查图片：重置 ${r.resetCount} 条失败记录，缺失的原图将重新下载、缩略图将重新生成`))
+                  .catch((e) => toast('error', `修复失败：${e instanceof Error ? e.message : e}`))
+                  .finally(() => setRepairing(false))
+              }}
+            >
+              检查并修复图片
+            </button>
+          </div>
+          <div className="value" style={{ opacity: 0.7 }}>
+            补齐缺失的缩略图/预览图；原图被删除的记录会重新下载。
+          </div>
+        </div>
+
         <div className="setting-row">
           <div className="label">Cookie 文件</div>
           <div className="value">

@@ -2,20 +2,35 @@ import { useEffect, useRef, useState } from 'react'
 import type { ItemSummary } from '../../../shared/types'
 import { api } from '../api'
 import { useImageUrl } from '../components/useImageUrl'
+import { requestDerivativePriority } from '../components/derivativePriority'
 
 function ItemCard({ item, onOpen }: { item: ItemSummary; onOpen: (id: number) => void }) {
   // 本地图片优先（同步时已下载到商品文件夹），未就绪时轮询本地缓存并触发后台补下
   const fallback = useImageUrl(item.localThumb ? null : item.thumbnailUrl)
   const thumb = item.localThumb || fallback
   const enqueued = useRef(false)
+  const cardRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!item.localThumb && item.thumbnailUrl && !enqueued.current) {
       enqueued.current = true
       void api.images.enqueueItem(item.itemId).catch(() => {})
     }
   }, [item.localThumb, item.thumbnailUrl, item.itemId])
+  // 卡片进入可视区时请求优先生成派生图（只通知一次）
+  useEffect(() => {
+    const el = cardRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        requestDerivativePriority(item.itemId)
+        io.disconnect()
+      }
+    })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [item.itemId])
   return (
-    <div className="card" onClick={() => onOpen(item.itemId)}>
+    <div className="card" ref={cardRef} onClick={() => onOpen(item.itemId)}>
       <span className="booth-id-badge">#{item.itemId}</span>
       {thumb ? (
         <img className="thumb" src={thumb} loading="lazy" alt="" />

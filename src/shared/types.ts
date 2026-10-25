@@ -294,6 +294,31 @@ export interface ImageProgress {
   queued: number
 }
 
+/** 派生图（缩略图/预览图）生成进度（当前批次） */
+export interface DerivativeProgress {
+  done: number
+  total: number
+  failed: number
+}
+
+/** 图片对账进度（检查原图与派生图文件） */
+export interface ReconcileProgress {
+  checked: number
+  total: number
+  done: boolean
+}
+
+/** 图片对账结果 */
+export interface ReconcileResult {
+  checked: number
+  /** 原图缺失、已退回待下载的条数 */
+  redownload: number
+  /** 派生图状态发生变化、需要重新核实/补齐的条数 */
+  derivMarked: number
+  /** 其中确认缺失派生图文件的条数（用于提示用户） */
+  derivMissing: number
+}
+
 /** 全文件列表行（更新与下载页，qBittorrent 风格） */
 export interface FileListRow {
   downloadableId: number

@@ -64,7 +64,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   // ── settings ──
   handle('settings:get', () => ctx.settings.get())
   handle('settings:set', async (patch: unknown) => {
-    const p = z.record(z.unknown()).parse(patch) as Record<string, unknown>
+    const p = z.record(z.string(), z.unknown()).parse(patch) as Record<string, unknown>
     if (p.proxyMode !== undefined && !['system', 'custom', 'direct'].includes(String(p.proxyMode))) {
       throw new Error(`无效的代理模式: ${String(p.proxyMode)}`)
     }
@@ -202,6 +202,30 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     for (const u of detail.galleryUrls) list.push({ url: u, kind: 'gallery' })
     ctx.imageLocalizer.registerItemImages(rid, list)
     return list.length
+  })
+
+  // 手动修复：清零派生图失败计数，完整对账原图与缩略图/预览图（缺失则重下/重生成）
+  handle('images:repair', async () => {
+    const r = await ctx.imageLocalizer.repairDerivatives()
+    log.info(`manual image repair: reset ${r.reset}, checked ${r.checked}, redownload ${r.redownload}, derivative marked ${r.derivMarked}`)
+    return { resetCount: r.reset, checked: r.checked, redownload: r.redownload, derivMarked: r.derivMarked }
+  })
+
+  // 可见商品优先生成派生图（卡片进入可视区 / 打开详情时调用，单次最多 50 个）
+  handle('images:prioritize', (itemIds: unknown) => {
+    const ids = z.array(id).max(50).parse(itemIds)
+    for (const itemId of ids) ctx.imageLocalizer.prioritizeItem(itemId)
+    return ids.length
+  })
+
+  // 商品详情页单品检查：本地核对缺失的原图/派生图，发现缺失即补齐
+  handle('images:checkItem', async (itemId: unknown) => {
+    const iid = id.parse(itemId)
+    const r = await ctx.imageLocalizer.checkItem(iid)
+    if (r.redownload > 0 || r.derivMissing > 0) {
+      log.info(`item image check #${iid}: checked ${r.checked}, redownload ${r.redownload}, derivative missing ${r.derivMissing}`)
+    }
+    return r
   })
 
   // ── 视频（yt-dlp） ──
@@ -379,6 +403,8 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   ctx.downloads.onQueueChanged = () => send('event:queueChanged', ctx.downloads.stats)
   ctx.imageLocalizer.onImageDone = (itemId, url) => send('event:imageReady', { itemId, url })
   ctx.imageLocalizer.onProgress = (e) => send('event:imageProgress', e)
+  ctx.imageLocalizer.onDerivativeProgress = (e) => send('event:derivativeProgress', e)
+  ctx.imageLocalizer.onReconcileProgress = (e) => send('event:reconcileProgress', e)
   ctx.videos.onProgress = (e) => send('event:videoProgress', e)
 
   log.info('ipc registered')

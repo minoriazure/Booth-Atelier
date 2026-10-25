@@ -283,7 +283,7 @@ if (!gotLock) {
       setTimeout(() => void deliverProtocolUrl(url), 150)
     }
 
-    // 后台补齐存量图片的缩略图（单张 + 250ms 间隔，不卡 UI；新图在下载完成时已即时生成）
+    // 后台补齐存量图片的缩略图（异步 sharp 单并发，不卡 UI；新图在下载完成时已即时生成；原图缺失的会重新下载）
     const backfillCtx = ctx
     setTimeout(() => {
       try {

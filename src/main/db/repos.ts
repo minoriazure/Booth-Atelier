@@ -10,6 +10,18 @@ import type {
   FileHistoryGroup
 } from '../../shared/types'
 
+/** 商品图片引用（rid 为 item_images 的 rowid，用于游标分页） */
+export interface ImageRef {
+  rid: number
+  url: string
+  itemId: number
+  kind: string
+  filename: string
+}
+
+/** 派生图（缩略图/预览图）就绪状态 */
+export type DerivStatus = 'ok' | 'missing' | 'unknown'
+
 /** items + downloadables 读写 */
 export class LibraryRepo {
   /** paths 用于 local_path 的相对存储：写入转相对，读取还原绝对（旧版绝对路径仍兼容） */
@@ -588,7 +600,11 @@ export class LibraryRepo {
           [r.url, r.itemId, r.kind, r.filename, 'pending']
         )
       } else if (existing.filename !== r.filename) {
-        this.db.run(`UPDATE item_images SET filename = ?, status = 'pending', updated_at = datetime('now') WHERE url = ?`, [r.filename, r.url])
+        // 文件名变化意味着派生图路径也变了，派生状态一并重置为未知
+        this.db.run(
+          `UPDATE item_images SET filename = ?, status = 'pending', thumb_status = 'unknown', preview_status = 'unknown', derivative_attempts = 0, derivative_error = NULL, updated_at = datetime('now') WHERE url = ?`,
+          [r.filename, r.url]
+        )
       }
     }
   }
@@ -601,12 +617,85 @@ export class LibraryRepo {
     this.db.run(`UPDATE item_images SET status = 'failed', updated_at = datetime('now') WHERE url = ?`, [url])
   }
 
-  /** 已下载完成的图片行（缩略图补齐扫描用） */
-  listDoneImages(limit = 5000): Array<{ url: string; itemId: number; filename: string }> {
+  /**
+   * 派生图候选（按 rowid 游标分页，启动回填与优先级队列共用）：
+   * 已下载、缩略图或预览图未确认就绪、失败次数未达上限。
+   */
+  listDerivativeCandidates(afterRowid: number, limit: number): ImageRef[] {
     return this.db.all(
-      `SELECT url, item_id AS itemId, filename FROM item_images WHERE status = 'done' LIMIT ?`,
-      [limit]
+      `SELECT rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images
+       WHERE status = 'done' AND derivative_attempts < 3
+         AND (thumb_status != 'ok' OR preview_status != 'ok') AND rowid > ?
+       ORDER BY rowid LIMIT ?`,
+      [afterRowid, limit]
     )
+  }
+
+  /** 某商品的派生图候选（用于可见卡片优先生成） */
+  listDerivativeCandidatesByItem(itemId: number): ImageRef[] {
+    return this.db.all(
+      `SELECT rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images
+       WHERE status = 'done' AND derivative_attempts < 3
+         AND (thumb_status != 'ok' OR preview_status != 'ok') AND item_id = ?
+       ORDER BY rowid`,
+      [itemId]
+    )
+  }
+
+  /** 对账用：已下载完成的行分页（按 rowid）；传 itemId 时只取该商品 */
+  listDoneImagePage(
+    afterRowid: number,
+    limit: number,
+    itemId?: number
+  ): Array<ImageRef & { thumbStatus: string; previewStatus: string }> {
+    return this.db.all(
+      `SELECT rowid AS rid, url, item_id AS itemId, kind, filename,
+              thumb_status AS thumbStatus, preview_status AS previewStatus
+       FROM item_images WHERE status = 'done' AND rowid > ? AND (? IS NULL OR item_id = ?)
+       ORDER BY rowid LIMIT ?`,
+      [afterRowid, itemId ?? null, itemId ?? null, limit]
+    )
+  }
+
+  /** 对账进度总数：已下载完成的行数，可按商品过滤 */
+  countDoneImages(itemId?: number): number {
+    const row = this.db.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM item_images WHERE status = 'done' AND (? IS NULL OR item_id = ?)`,
+      [itemId ?? null, itemId ?? null]
+    )
+    return Number(row?.n ?? 0)
+  }
+
+  /** 原图文件缺失时，把已完成记录退回待下载 */
+  markImagePending(url: string): void {
+    this.db.run(`UPDATE item_images SET status = 'pending', updated_at = datetime('now') WHERE url = ?`, [url])
+  }
+
+  /** 派生图状态：'ok' 文件已确认存在；'missing' 确认缺失；'unknown' 未核实 */
+  setDerivativeStatus(url: string, thumb: DerivStatus, preview: DerivStatus): void {
+    this.db.run(`UPDATE item_images SET thumb_status = ?, preview_status = ? WHERE url = ?`, [thumb, preview, url])
+  }
+
+  markDerivativeOk(url: string): void {
+    this.db.run(
+      `UPDATE item_images SET thumb_status = 'ok', preview_status = 'ok', derivative_error = NULL WHERE url = ?`,
+      [url]
+    )
+  }
+
+  /** 派生图生成失败：计数 +1（达到 3 次后不再自动重试） */
+  markDerivativeFailed(url: string, error: string): void {
+    this.db.run(
+      `UPDATE item_images SET derivative_attempts = derivative_attempts + 1, derivative_error = ? WHERE url = ?`,
+      [error.slice(0, 500), url]
+    )
+  }
+
+  /** 手动修复：派生图失败计数与错误清零，允许重新尝试 */
+  resetDerivativeAttempts(): number {
+    const before = this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM item_images WHERE derivative_attempts > 0`)
+    this.db.run(`UPDATE item_images SET derivative_attempts = 0, derivative_error = NULL WHERE derivative_attempts > 0`)
+    return Number(before?.n ?? 0)
   }
 
   listPendingImages(limit = 100): Array<{ url: string; itemId: number; kind: string; filename: string }> {
