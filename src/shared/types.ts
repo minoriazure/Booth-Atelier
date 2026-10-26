@@ -187,6 +187,13 @@ export interface Settings {
 }
 
 /** 代理连通性测试结果（访问 BOOTH 首页） */
+/** 日志级别（行首标记 `[LEVEL]`）；MESSAGE = 面向用户的弹窗 / toast */
+export const LOG_LEVELS = ['INFO', 'WARN', 'ERROR', 'DEBUG', 'MESSAGE'] as const
+export type LogLevel = (typeof LOG_LEVELS)[number]
+
+/** 日志页默认显示的级别 */
+export const DEFAULT_LOG_VIEW_LEVELS: LogLevel[] = ['MESSAGE', 'WARN', 'ERROR']
+
 /** 日志文件（每天一个）的元信息 */
 export interface LogDayInfo {
   /** YYYY-MM-DD */

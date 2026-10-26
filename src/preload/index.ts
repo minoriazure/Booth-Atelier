@@ -25,7 +25,8 @@ import type {
   ProxyTestResult,
   LogDayInfo,
   LogPageResult,
-  LogSearchResult
+  LogSearchResult,
+  LogLevel
 } from '../shared/types'
 
 export interface VideoProgressEvent {
@@ -39,10 +40,10 @@ export interface VideoProgressEvent {
 
 export interface BoothAPI {
   log: {
-    listDays(): Promise<LogDayInfo[]>
-    readDay(date: string, offset: number, limit: number): Promise<LogPageResult>
-    search(query: string): Promise<LogSearchResult>
-    write(level: 'info' | 'warn' | 'error', scope: string, message: string): Promise<void>
+    listDays(levels: LogLevel[]): Promise<LogDayInfo[]>
+    readDay(date: string, offset: number, limit: number, levels: LogLevel[]): Promise<LogPageResult>
+    search(query: string, levels: LogLevel[]): Promise<LogSearchResult>
+    write(level: 'info' | 'warn' | 'error' | 'message', scope: string, message: string): Promise<void>
     /** 日志文件有新增内容时触发（已合并节流） */
     onAppended(cb: () => void): () => void
   }
@@ -158,9 +159,9 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 
 const api: BoothAPI = {
   log: {
-    listDays: () => ipcRenderer.invoke('log:listDays'),
-    readDay: (date, offset, limit) => ipcRenderer.invoke('log:readDay', date, offset, limit),
-    search: (query) => ipcRenderer.invoke('log:search', query),
+    listDays: (levels) => ipcRenderer.invoke('log:listDays', levels),
+    readDay: (date, offset, limit, levels) => ipcRenderer.invoke('log:readDay', date, offset, limit, levels),
+    search: (query, levels) => ipcRenderer.invoke('log:search', query, levels),
     write: (level, scope, message) => ipcRenderer.invoke('log:write', level, scope, message),
     onAppended: (cb) => subscribe('event:logAppended', cb)
   },

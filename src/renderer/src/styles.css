@@ -18,6 +18,8 @@
   --thumb-track: rgba(255, 255, 255, 0.06);
   --thumb: rgba(160, 170, 190, 0.28);
   --thumb-hover: rgba(160, 170, 190, 0.5);
+  --btn-hover: #2a2e3a;
+  --btn-hover-border: #3d4252;
 }
 
 [data-theme='light'] {
@@ -38,6 +40,8 @@
   --thumb-track: rgba(0, 0, 0, 0.06);
   --thumb: rgba(70, 80, 100, 0.32);
   --thumb-hover: rgba(70, 80, 100, 0.55);
+  --btn-hover: #e2e6ee;
+  --btn-hover-border: #c8ced9;
   color-scheme: light;
 }
 
@@ -100,8 +104,8 @@ button {
   transition: background 0.15s, border-color 0.15s;
 }
 button:hover:not(:disabled) {
-  background: #2a2e3a;
-  border-color: #3d4252;
+  background: var(--btn-hover);
+  border-color: var(--btn-hover-border);
 }
 button:disabled {
   opacity: 0.5;
@@ -975,6 +979,79 @@ input.invalid {
 }
 .log-row:empty::before {
   content: '\00a0';
+}
+.log-row.log-lv-info {
+  color: var(--accent2);
+}
+.log-row.log-lv-debug {
+  color: var(--text-dim);
+}
+.log-row.log-lv-message {
+  color: #4c8dff;
+}
+.log-levels {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.log-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  /* 关闭：中性灰底，文字用级别色但淡化 */
+  background: color-mix(in srgb, var(--text-dim) 14%, transparent);
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.55;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
+}
+.log-chip:hover {
+  opacity: 0.85;
+}
+/* 开启：级别色底 + 完整不透明文字 */
+.log-chip.is-on {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+/* 隐藏原生复选框，用标签自身的边框/底色表示选中状态，跟随主题 */
+.log-chip input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  pointer-events: none;
+}
+.log-chip-info {
+  color: var(--accent2);
+}
+.log-chip-debug {
+  color: var(--text-dim);
+}
+.log-chip-warn {
+  color: var(--warn);
+}
+.log-chip-error {
+  color: var(--error);
+}
+.log-chip-message {
+  color: #4c8dff;
+}
+.log-row.log-lv-warn {
+  color: var(--warn);
+}
+.log-row.log-lv-error {
+  color: var(--error);
+  font-weight: 600;
 }
 .log-row-cur {
   background: rgba(76, 141, 255, 0.18);

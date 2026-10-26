@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api } from '../api'
-import type { LogDayInfo, LogSearchHit } from '../../../shared/types'
+import type { LogDayInfo, LogLevel, LogSearchHit } from '../../../shared/types'
+import { DEFAULT_LOG_VIEW_LEVELS, LOG_LEVELS } from '../../../shared/types'
 
 /** 每行固定高度（虚拟列表依赖它计算位置） */
 const ROW_H = 20
@@ -28,6 +29,14 @@ function findDay(starts: number[], n: number, r: number): number {
     else hi = mid - 1
   }
   return lo
+}
+
+/** 行首的级别标记，例如 `2026-10-26 10:41:57.010 [WARN] [scope] ...` */
+const LEVEL_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \[(INFO|WARN|ERROR|DEBUG|MESSAGE)\]/
+
+function levelClass(text: string): string {
+  const m = LEVEL_RE.exec(text)
+  return m ? ` log-lv-${m[1].toLowerCase()}` : ''
 }
 
 function chunkKey(date: string, chunk: number): string {
@@ -60,6 +69,8 @@ export default function LogPage() {
   const [tick, setTick] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [dayMenuOpen, setDayMenuOpen] = useState(false)
+  /** 当前显示的日志级别（多选，主进程按此过滤） */
+  const [levels, setLevels] = useState<LogLevel[]>(DEFAULT_LOG_VIEW_LEVELS)
 
   const [query, setQuery] = useState('')
   const [activeQuery, setActiveQuery] = useState('')
@@ -78,6 +89,9 @@ export default function LogPage() {
   const openRef = useRef(0)
   const busyRef = useRef(false)
   const againRef = useRef(false)
+  /** 级别选择的同步引用；viewVerRef 每次切换级别自增，用于丢弃旧级别的在途读取结果 */
+  const levelsRef = useRef<LogLevel[]>(DEFAULT_LOG_VIEW_LEVELS)
+  const viewVerRef = useRef(0)
 
   /** 每天的起始行号前缀和：starts[i] = 第 i 天标题行的行号 */
   const starts = useMemo(() => {
@@ -98,7 +112,7 @@ export default function LogPage() {
     }
     busyRef.current = true
     try {
-      const list = await api.log.listDays()
+      const list = await api.log.listDays(levelsRef.current)
       const prev = daysRef.current
       const prevOpen = openRef.current
       const scrollTop = scrollRef.current?.scrollTop ?? 0
@@ -226,9 +240,15 @@ export default function LogPage() {
     for (const [k, v] of need) {
       if (cache.has(k) || inflightRef.current.has(k)) continue
       inflightRef.current.add(k)
+      const ver = viewVerRef.current
       api.log
-        .readDay(v.date, v.chunk * CHUNK, CHUNK)
+        .readDay(v.date, v.chunk * CHUNK, CHUNK, levelsRef.current)
         .then((res) => {
+          // 级别已切换：丢弃旧结果，并触发按新级别重新读取
+          if (ver !== viewVerRef.current) {
+            setTick((t) => t + 1)
+            return
+          }
           // 读取期间日志又有新增（行号已变）则不缓存旧数据，直接重新同步
           const cur = daysRef.current.find((d) => d.date === v.date)?.lines
           if (res.total !== cur) {
@@ -251,6 +271,13 @@ export default function LogPage() {
   const openNextDay = useCallback(() => {
     setOpenCount((c) => Math.min(c + 1, days.length))
   }, [days.length])
+
+  // 内容不足以滚动时（onScroll 不会触发），自动继续拼接更早的一天
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || openCount >= days.length) return
+    if (el.scrollHeight - el.clientHeight < 80) openNextDay()
+  }, [openCount, days.length, totalRows, viewH, openNextDay])
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -302,7 +329,7 @@ export default function LogPage() {
     if (!q) return
     setSearching(true)
     try {
-      const r = await api.log.search(q)
+      const r = await api.log.search(q, levelsRef.current)
       setHits(r.hits)
       setHitTruncated(r.truncated)
       setActiveQuery(q)
@@ -330,6 +357,25 @@ export default function LogPage() {
     setHits([])
     setHitIdx(-1)
     setCurHit(null)
+  }
+
+  /** 切换某个级别的显示：清空缓存与搜索，从最新一天重新加载 */
+  const toggleLevel = (lv: LogLevel): void => {
+    const next = LOG_LEVELS.filter((x) => (x === lv ? !levels.includes(x) : levels.includes(x)))
+    levelsRef.current = next
+    viewVerRef.current++
+    setLevels(next)
+    cacheRef.current.clear()
+    inflightRef.current.clear()
+    clearSearch()
+    pendingScrollRef.current = null
+    daysRef.current = []
+    openRef.current = 0
+    setDays([])
+    setOpenCount(0)
+    setScrollTop(0)
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
+    void refreshLive()
   }
 
   // 当前视口顶部所在的日期，用于下拉框显示
@@ -360,6 +406,7 @@ export default function LogPage() {
         const text = cache.get(chunkKey(date, chunk))?.[L - chunk * CHUNK]
         if (text !== undefined) {
           const isCur = curHit !== null && curHit.date === date && curHit.row === L
+          cls += levelClass(text)
           if (isCur) cls += ' log-row-cur'
           content = activeQuery ? highlight(text, activeQuery) : text
         }
@@ -394,6 +441,15 @@ export default function LogPage() {
               </div>
             </>
           )}
+        </div>
+        <div className="log-levels">
+          {LOG_LEVELS.map((lv) => (
+            <label key={lv} className={`log-chip log-chip-${lv.toLowerCase()}${levels.includes(lv) ? ' is-on' : ''}`}>
+
+              <input type="checkbox" checked={levels.includes(lv)} onChange={() => toggleLevel(lv)} />
+              {lv}
+            </label>
+          ))}
         </div>
         <input
           type="search"

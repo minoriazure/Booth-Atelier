@@ -22,10 +22,12 @@ export default function DeleteItemDialog({
   const matched = typed.trim() === String(itemId)
   const cancel = () => {
     void api.log.write('info', 'dialog', `delete item ${itemId} dialog: cancelled`).catch(() => {})
+    void api.log.write('message', 'dialog', `delete item ${itemId} dialog: cancelled`).catch(() => {})
     onCancel()
   }
   const confirm = () => {
     void api.log.write('warn', 'dialog', `delete item ${itemId} dialog: confirmed`).catch(() => {})
+    void api.log.write('message', 'dialog', `delete item ${itemId} dialog: confirmed`).catch(() => {})
     onConfirm()
   }
 

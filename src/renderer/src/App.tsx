@@ -48,6 +48,7 @@ export default function App() {
     setToasts((t) => [...t, { id, level, message }])
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000)
     void api.log.write(level, 'toast', message).catch(() => {})
+    void api.log.write('message', 'toast', message).catch(() => {})
   }, [])
 
   /** 统一处理 auth.check 结果：限流只提示（不弹 Cookie 弹窗），真失效才置红 */

@@ -12,6 +12,8 @@ type Logger = {
   warn: (...args: unknown[]) => void
   error: (...args: unknown[]) => void
   debug: (...args: unknown[]) => void
+  /** 面向用户的弹窗 / toast 内容 */
+  message: (...args: unknown[]) => void
 }
 
 let logDirOverride: string | null = null
@@ -88,8 +90,7 @@ export function createLogger(scope: string): Logger {
     info: (...a) => writeLine('INFO', scope, a),
     warn: (...a) => writeLine('WARN', scope, a),
     error: (...a) => writeLine('ERROR', scope, a),
-    debug: (...a) => {
-      if (process.env.DEBUG) writeLine('DEBUG', scope, a)
-    }
+    debug: (...a) => writeLine('DEBUG', scope, a),
+    message: (...a) => writeLine('MESSAGE', scope, a)
   }
 }

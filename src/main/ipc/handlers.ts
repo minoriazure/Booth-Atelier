@@ -8,6 +8,7 @@ import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
 import { listDays, readDay, searchLogs, cleanupLogs } from '../services/logService'
 import type { ProxyTestResult } from '../../shared/types'
+import { LOG_LEVELS } from '../../shared/types'
 
 const log = createLogger('ipc')
 
@@ -113,15 +114,21 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     return next
   })
   // ── log ──
-  handle('log:listDays', () => listDays())
-  handle('log:readDay', (date: unknown, offset: unknown, limit: unknown) =>
-    readDay(q.parse(date), z.number().int().min(0).parse(offset), z.number().int().min(1).max(1000).parse(limit))
+  const levelsArg = z.array(z.enum(LOG_LEVELS)).max(LOG_LEVELS.length)
+  handle('log:listDays', (levels: unknown) => listDays(levelsArg.parse(levels)))
+  handle('log:readDay', (date: unknown, offset: unknown, limit: unknown, levels: unknown) =>
+    readDay(
+      q.parse(date),
+      z.number().int().min(0).parse(offset),
+      z.number().int().min(1).max(1000).parse(limit),
+      levelsArg.parse(levels)
+    )
   )
-  handle('log:search', (query: unknown) => searchLogs(q.max(200).parse(query)))
+  handle('log:search', (query: unknown, levels: unknown) => searchLogs(q.max(200).parse(query), levelsArg.parse(levels)))
   const rendererLog = createLogger('renderer')
   /** 渲染层日志（toast / 错误边界等）写入同一套日志文件 */
   handle('log:write', (level: unknown, scope: unknown, message: unknown) => {
-    const lv = z.enum(['info', 'warn', 'error']).parse(level)
+    const lv = z.enum(['info', 'warn', 'error', 'message']).parse(level)
     const sc = q.max(64).parse(scope)
     const msg = q.max(4000).parse(message)
     rendererLog[lv](`[${sc}] ${msg}`)

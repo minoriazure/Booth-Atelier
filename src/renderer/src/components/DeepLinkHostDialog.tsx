@@ -14,6 +14,7 @@ export default function DeepLinkHostDialog({
 }) {
   const decide = (d: 'register' | 'decline') => {
     void api.log.write('info', 'dialog', `deeplink host prompt: user chose ${d}`).catch(() => {})
+    void api.log.write('message', 'dialog', `deeplink host prompt: user chose ${d}`).catch(() => {})
     onDecide(d)
   }
   return (

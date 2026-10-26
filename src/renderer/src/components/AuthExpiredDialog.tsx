@@ -15,11 +15,13 @@ export default function AuthExpiredDialog({
   const [path, setPath] = useState('')
   useEffect(() => {
     void api.log.write('warn', 'dialog', `auth expired dialog shown: ${message ?? ''}`).catch(() => {})
+    void api.log.write('message', 'dialog', `auth expired dialog shown: ${message ?? ''}`).catch(() => {})
     void api.auth.cookiesPath().then(setPath)
   }, [])
 
   const close = () => {
     void api.log.write('info', 'dialog', 'auth expired dialog closed by user').catch(() => {})
+    void api.log.write('message', 'dialog', 'auth expired dialog closed by user').catch(() => {})
     onClose()
   }
 

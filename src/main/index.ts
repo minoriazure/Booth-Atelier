@@ -207,6 +207,7 @@ if (!gotLock) {
         /* ignore */
       }
       log.error('showing boot error dialog')
+      log.message('showing boot error dialog')
       dialog.showErrorBox('启动失败', `应用初始化失败：\n${msg}`)
       app.quit()
     }
