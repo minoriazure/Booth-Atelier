@@ -1756,12 +1756,6 @@ button.danger-solid:hover:not(:disabled) {
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
-.dl-th-item { width: 220px; }
-.dl-th-file { width: auto; }
-.dl-th-size { width: 88px; }
-.dl-th-status { width: 76px; }
-.dl-th-progress { width: 240px; }
-.dl-th-action { width: 156px; }
 /* ── 列宽拖拽手柄（表头右缘，资源管理器式） ── */
 .col-resize {
   position: absolute;
@@ -1804,18 +1798,24 @@ button.danger-solid:hover:not(:disabled) {
 .dl-cell-item {
   overflow: hidden;
 }
+/* booth 号与标题各占一行 */
 .dl-item-id {
+  display: block;
   color: var(--text-dim);
   font-size: 11px;
-  margin-right: 6px;
+  line-height: 1.4;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .dl-item-name {
-  display: inline;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  vertical-align: bottom;
+  line-height: 1.4;
+}
+.dl-cell-status .badge {
+  white-space: nowrap;
 }
 .dl-cell-file {
   overflow: hidden;
@@ -1842,14 +1842,15 @@ button.danger-solid:hover:not(:disabled) {
 /* 行内进度条 */
 .dl-row-progress {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   min-width: 0;
 }
 .dl-row-progress .progressbar {
-  flex: 1;
+  flex: 1 1 40px;
   height: 6px;
-  min-width: 60px;
+  min-width: 40px;
   background: var(--bg3);
   border-radius: 3px;
   overflow: hidden;
@@ -1880,7 +1881,6 @@ button.danger-solid:hover:not(:disabled) {
   font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
-  min-width: 120px;
   text-align: right;
 }
 .dl-cell-progress:empty {

@@ -50,18 +50,20 @@ const FILTERS: Array<{ key: string; label: string }> = [
 
 /**
  * 表格列定义（资源管理器式拖拽调宽）：
- * - def = 初始宽度；null 表示自适应剩余宽度（文件列）
+ * - pct = 默认宽度占表格容器宽度的百分比（合计 100，全部默认时正好填满、无横向滚动条）
+ * - min = 最小像素宽度（状态列需容纳「待下载·更新」不换行）
  * - 用户拖过的宽度存 localStorage，双击分隔线恢复默认
  */
-const COLS: Array<{ key: string; label: string; cls: string; def: number | null; min: number }> = [
-  { key: 'item', label: '商品', cls: 'dl-th-item', def: 220, min: 120 },
-  { key: 'file', label: '文件', cls: 'dl-th-file', def: null, min: 160 },
-  { key: 'size', label: '大小', cls: 'dl-th-size', def: 88, min: 64 },
-  { key: 'status', label: '状态', cls: 'dl-th-status', def: 76, min: 64 },
-  { key: 'progress', label: '进度', cls: 'dl-th-progress', def: 240, min: 120 },
-  { key: 'action', label: '操作', cls: 'dl-th-action', def: 156, min: 110 }
+const COLS: Array<{ key: string; label: string; cls: string; pct: number; min: number }> = [
+  { key: 'item', label: '商品', cls: 'dl-th-item', pct: 28, min: 120 },
+  { key: 'file', label: '文件', cls: 'dl-th-file', pct: 28, min: 160 },
+  { key: 'size', label: '大小', cls: 'dl-th-size', pct: 8, min: 64 },
+  { key: 'status', label: '状态', cls: 'dl-th-status', pct: 10, min: 100 },
+  { key: 'progress', label: '进度', cls: 'dl-th-progress', pct: 12, min: 140 },
+  { key: 'action', label: '操作', cls: 'dl-th-action', pct: 14, min: 110 }
 ]
-const LS_COL_KEY = 'booth-dl-colwidths'
+/* v2：百分比默认值上线后换新键，避免旧版保存的像素宽度覆盖新默认 */
+const LS_COL_KEY = 'booth-dl-colwidths-v2'
 type ColWidths = Record<string, number>
 
 function loadColWidths(): ColWidths {
@@ -126,8 +128,8 @@ export default function UpdatesPage({
   // 左边缘固定、右边缘跟随鼠标，其余列（尤其右侧）整体刚性平移，总宽变化用横向滚动条承接。
   const wrapRef = useRef<HTMLDivElement>(null)
   const [colWidths, setColWidths] = useState<ColWidths>(() => loadColWidths())
-  /** 文件列的自适应宽度：首绘用近似值，布局测定后精确（容器宽 − 其余列固定宽） */
-  const [fileFill, setFileFill] = useState(479)
+  /** 表格容器可用宽度（不含边框与滚动条），默认列宽按它的百分比计算 */
+  const [winWidth, setWinWidth] = useState(0)
   const [resizing, setResizing] = useState(false)
   const dragRef = useRef<{ key: string; startX: number; startW: number } | null>(null)
   const widthsRef = useRef(colWidths)
@@ -136,17 +138,15 @@ export default function UpdatesPage({
   const widthOf = (key: string): number => {
     const saved = colWidths[key]
     if (saved != null) return saved
-    if (key === 'file') return fileFill
-    return COLS.find((c) => c.key === key)?.def ?? 100
+    const col = COLS.find((c) => c.key === key)
+    if (!col) return 100
+    return Math.max(col.min, Math.round((winWidth * col.pct) / 100))
   }
 
   useLayoutEffect(() => {
     const calc = (): void => {
       const el = wrapRef.current
-      if (!el) return
-      const fixed = COLS.reduce((s, c) => s + (c.key !== 'file' && c.def != null ? c.def : 0), 0)
-      const avail = el.clientWidth - 2 // 容器左右边框
-      if (avail > fixed) setFileFill(avail - fixed)
+      if (el) setWinWidth(el.clientWidth)
     }
     calc()
     window.addEventListener('resize', calc)
