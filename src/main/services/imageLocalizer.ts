@@ -630,17 +630,18 @@ export class ImageLocalizer {
 
   /**
    * 把中断遗留的 pending/failed 图片重新入队（分页扫描，不设上限）。
-   * 文件已存在的直接标记完成；其余按 rowid 顺序入队下载。返回真实入队数。
+   * 文件已存在的直接标记完成；其余按 缩略图 → og → 其余、同档按 rowid 入队下载。返回真实入队数。
    */
   requeuePending(): { scanned: number; queued: number } {
     this.flushStatus()
-    let afterRowid = 0
+    let cursor = { prio: -1, rid: 0 }
     let scanned = 0
     let queued = 0
     for (;;) {
-      const rows = this.repo.listPendingImagePage(afterRowid, 500)
+      const rows = this.repo.listPendingImagePage(cursor, 500)
       if (rows.length === 0) break
-      afterRowid = rows[rows.length - 1].rid
+      const last = rows[rows.length - 1]
+      cursor = { prio: last.prio, rid: last.rid }
       for (const r of rows) {
         scanned++
         const p = this.localPath(r.itemId, r.filename)

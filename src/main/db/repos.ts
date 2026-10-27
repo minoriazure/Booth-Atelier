@@ -698,14 +698,20 @@ export class LibraryRepo {
     return Number(before?.n ?? 0)
   }
 
-  /** 图片待下载/失败行分页（按 rowid，供启动与手动检查全量扫描） */
+  /**
+   * 图片待下载/失败行分页（供启动与手动检查全量扫描）。
+   * 排序：thumb → og → 其余，同档按 rowid；游标为 (prio, rowid)，不设总量上限。
+   */
   listPendingImagePage(
-    afterRowid: number,
+    after: { prio: number; rid: number },
     limit: number
-  ): Array<{ rid: number; url: string; itemId: number; kind: string; filename: string }> {
+  ): Array<{ prio: number; rid: number; url: string; itemId: number; kind: string; filename: string }> {
+    const prio = `(CASE kind WHEN 'thumb' THEN 0 WHEN 'og' THEN 1 ELSE 2 END)`
     return this.db.all(
-      `SELECT rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images WHERE status IN ('pending','failed') AND rowid > ? ORDER BY rowid LIMIT ?`,
-      [afterRowid, limit]
+      `SELECT ${prio} AS prio, rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images
+       WHERE status IN ('pending','failed') AND (${prio}, rowid) > (?, ?)
+       ORDER BY prio, rid LIMIT ?`,
+      [after.prio, after.rid, limit]
     )
   }
 
