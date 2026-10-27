@@ -16,19 +16,77 @@ function formatBytes(n: number | null | undefined): string {
   return `${(n / 1073741824).toFixed(2)} GB`
 }
 
+const MEDIA_PREFIX = 'image-cache://local/'
+
 /** 绝对路径 → 本地媒体 URL（与主进程协议一致） */
 function toMedia(path: string): string {
-  return `image-cache://local/${encodeURIComponent(path)}`
+  return `${MEDIA_PREFIX}${encodeURIComponent(path)}`
 }
 
-/** 大图放大查看器：滚轮缩放（以光标为中心）+ 鼠标拖拽平移 + 双击复位 */
-function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
+/** 本地媒体 URL → 绝对路径；非本地媒体 URL 返回 null */
+function fromMedia(url: string): string | null {
+  return url.startsWith(MEDIA_PREFIX) ? decodeURIComponent(url.slice(MEDIA_PREFIX.length)) : null
+}
+
+/** 左右切换的雪佛龙图标（SVG 路径以 24×24 画布中心为对称中心，保证居中） */
+function ChevronIcon({ dir }: { dir: 'prev' | 'next' }) {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path
+        d={dir === 'prev' ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6'}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+const stopProp = (e: React.SyntheticEvent): void => e.stopPropagation()
+
+/** 大图放大查看器：滚轮缩放（以光标为中心）+ 鼠标拖拽平移 + 双击复位 + 左右竖条切换 */
+function ZoomViewer({
+  items,
+  index,
+  onIndexChange,
+  onClose
+}: {
+  items: string[]
+  index: number
+  onIndexChange: (i: number) => void
+  onClose: () => void
+}) {
+  const src = items[index]
+  const multi = items.length > 1
   const [scale, setScale] = useState(1)
   const [tx, setTx] = useState(0)
   const [ty, setTy] = useState(0)
   const dragRef = useRef<{ x: number; y: number; tx: number; ty: number; moved: boolean } | null>(null)
   const suppressClickRef = useRef(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+
+  // 顶部提示条 / 底部控制条：鼠标进入上下边缘区域时显示，离开后 1 秒隐藏，避免遮挡图片
+  const TOP_BAND = 82
+  const BOTTOM_BAND = 96
+  // 上下两条共用一个显示状态：鼠标在任一激活区域内时同时显示
+  const [barsOn, setBarsOn] = useState(false)
+  const hideTimer = useRef<number | undefined>(undefined)
+  const updateBars = (y: number): void => {
+    const inBand = y <= TOP_BAND || y >= window.innerHeight - BOTTOM_BAND
+    if (inBand) {
+      window.clearTimeout(hideTimer.current)
+      hideTimer.current = undefined
+      setBarsOn(true)
+    } else if (hideTimer.current === undefined) {
+      hideTimer.current = window.setTimeout(() => {
+        hideTimer.current = undefined
+        setBarsOn(false)
+      }, 1000)
+    }
+  }
+  useEffect(() => () => window.clearTimeout(hideTimer.current), [])
 
   // 滚轮缩放：以光标位置为锚点
   useEffect(() => {
@@ -60,6 +118,7 @@ function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
     dragRef.current = { x: e.clientX, y: e.clientY, tx, ty, moved: false }
   }
   const onMouseMove = (e: React.MouseEvent): void => {
+    updateBars(e.clientY)
     const d = dragRef.current
     if (!d) return
     const dx = e.clientX - d.x
@@ -89,6 +148,13 @@ function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
     return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
   }
 
+  // 切换图片时复位缩放与平移
+  useEffect(() => {
+    setScale(1)
+    setTx(0)
+    setTy(0)
+  }, [src])
+
   // ESC 关闭；双击复位
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -104,6 +170,15 @@ function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
     setTy(0)
   }
 
+  const go = (delta: number): void => {
+    onIndexChange((index + delta + items.length) % items.length)
+  }
+
+  const revealCurrent = (): void => {
+    const p = fromMedia(src)
+    if (p) void api.history.revealPath(p)
+  }
+
   return (
     <div
       className="zoom-viewer"
@@ -111,8 +186,19 @@ function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={endDrag}
-      onMouseLeave={endDrag}
+      onMouseLeave={() => {
+        endDrag()
+        window.clearTimeout(hideTimer.current)
+        hideTimer.current = undefined
+        setBarsOn(false)
+      }}
       onDoubleClick={reset}
+      onContextMenu={(e) => {
+        // 控制条与左右竖条上的右键不响应，其余位置（图片、空白）右键退出
+        if ((e.target as HTMLElement).closest('.zoom-controls, .zoom-nav-zone')) return
+        e.preventDefault()
+        onClose()
+      }}
       onClick={(e) => {
         // 拖拽结束派发的 click：吞掉，不关闭
         if (suppressClickRef.current) {
@@ -124,8 +210,41 @@ function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
         if (!isOnImage(e)) onClose()
       }}
     >
+      {multi && (
+        <button
+          type="button"
+          className="zoom-nav-zone prev"
+          title="上一张"
+          onMouseDown={stopProp}
+          onDoubleClick={stopProp}
+          onContextMenu={stopProp}
+          onClick={(e) => {
+            stopProp(e)
+            go(-1)
+          }}
+        >
+          <ChevronIcon dir="prev" />
+        </button>
+      )}
       <img src={src} alt="" draggable={false} style={{ transform: `translate(${tx}px, ${ty}px) scale(${scale})` }} />
-      <div className="zoom-controls" onClick={(e) => e.stopPropagation()}>
+      {multi && (
+        <button
+          type="button"
+          className="zoom-nav-zone next"
+          title="下一张"
+          onMouseDown={stopProp}
+          onDoubleClick={stopProp}
+          onContextMenu={stopProp}
+          onClick={(e) => {
+            stopProp(e)
+            go(1)
+          }}
+        >
+          <ChevronIcon dir="next" />
+        </button>
+      )}
+      <div className={`zoom-controls${barsOn ? ' show' : ''}`} onClick={stopProp} onDoubleClick={stopProp}>
+        <button onClick={revealCurrent} title="在文件夹中显示此图片">打开图片位置</button>
         <button onClick={() => setScale((v) => Math.min(12, v * 1.25))}>＋</button>
         <span className="zoom-pct">{Math.round(scale * 100)}%</span>
         <button onClick={() => setScale((v) => Math.max(0.2, v / 1.25))}>－</button>
@@ -134,7 +253,9 @@ function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
           ✕ 关闭
         </button>
       </div>
-      <div className="zoom-hint">滚轮缩放 · 拖拽平移 · 双击复位 · ESC 关闭</div>
+      <div className={`zoom-hint${barsOn ? ' show' : ''}`}>
+        滚轮缩放 · 拖拽平移 · 双击复位 · {multi ? '左右边缘切换 · ' : ''}右键 / ESC 关闭
+      </div>
     </div>
   )
 }
@@ -167,7 +288,16 @@ function Gallery({
   }, [images, videos])
 
   const [idx, setIdx] = useState(0)
-  const [zoomSrc, setZoomSrc] = useState<string | null>(null)
+  const [zoomSlide, setZoomSlide] = useState<number | null>(null)
+  // 可放大的图片幻灯片（已有原图）；查看器在其间切换，并同步画廊当前幻灯片
+  const zoomable = useMemo(() => {
+    const out: Array<{ slide: number; src: string }> = []
+    slides.forEach((s, i) => {
+      if (s.type === 'image' && s.orig) out.push({ slide: i, src: s.orig })
+    })
+    return out
+  }, [slides])
+  const zoomPos = zoomSlide == null ? -1 : zoomable.findIndex((z) => z.slide === zoomSlide)
   // 首尾回绕时临时关闭过渡，避免轨道从末张反向滑过全部幻灯片
   const [instant, setInstant] = useState(false)
   const stripRef = useRef<HTMLDivElement>(null)
@@ -251,7 +381,7 @@ function Gallery({
     <div className="gallery2">
       <div className="gallery2-stage">
         <button className="gallery2-nav prev" onClick={() => go(idx - 1)} title="上一张" disabled={slides.length < 2}>
-          ‹
+          <ChevronIcon dir="prev" />
         </button>
         <div className="gallery2-image">
           <div
@@ -296,7 +426,7 @@ function Gallery({
                           title="点击放大查看"
                           onLoad={() => setLoaded((l) => ({ ...l, [i]: true }))}
                           onError={() => setBroken((b) => ({ ...b, [i]: true }))}
-                          onClick={() => loaded[i] && s.orig && setZoomSrc(s.orig)}
+                          onClick={() => loaded[i] && s.orig && setZoomSlide(i)}
                         />
                       )}
                     </div>
@@ -307,7 +437,7 @@ function Gallery({
           </div>
         </div>
         <button className="gallery2-nav next" onClick={() => go(idx + 1)} title="下一张" disabled={slides.length < 2}>
-          ›
+          <ChevronIcon dir="next" />
         </button>
         <div className="gallery2-counter">
           {Math.min(idx + 1, slides.length)} / {slides.length}
@@ -342,7 +472,18 @@ function Gallery({
           ))}
         </div>
       )}
-      {zoomSrc && <ZoomViewer src={zoomSrc} onClose={() => setZoomSrc(null)} />}
+      {zoomPos >= 0 && (
+        <ZoomViewer
+          items={zoomable.map((z) => z.src)}
+          index={zoomPos}
+          onIndexChange={(p) => {
+            const slide = zoomable[p].slide
+            setZoomSlide(slide)
+            go(slide)
+          }}
+          onClose={() => setZoomSlide(null)}
+        />
+      )}
     </div>
   )
 }
