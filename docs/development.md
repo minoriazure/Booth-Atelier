@@ -70,14 +70,14 @@ npx electron .
 
 | 模式 | 数据库与日志 |
 | --- | --- |
-| 便携版 | exe 同级 `data/`（库数据、日志 `log/YYYY-MM-DD.log`）与 `data/electron/`（Electron userData：缓存、单实例锁），下载根默认 exe 同级 `downloads/` |
-| 开发版（`npm run dev`，未设置 `PORTABLE_EXECUTABLE_DIR`） | 仓库内 `.temp\electron\`（库数据与 userData 同目录；可用 `BOOTH_DATA_DIR` 覆盖） |
+| 便携版 | exe 同级 `data/`（库数据、日志 `log/YYYY-MM-DD.log`）与 `data/electron/`（Electron userData：缓存、单实例锁），下载根默认 exe 同级 `downloads/`，已删除归档 `deleted/` |
+| 开发版（`npm run dev`，未设置 `PORTABLE_EXECUTABLE_DIR`） | 仓库内 `.temp\` 作为等价根，布局与便携版一致：`.temp\data\`（库数据、日志）、`.temp\data\electron\`（userData）、`.temp\downloads\`、`.temp\deleted\`；可用 `BOOTH_DATA_DIR` 覆盖数据目录 |
 
-开发版日志位于 `.temp\electron\log\`，便携版日志位于 exe 同级 `data\log\`（按日期命名，如 `2026-10-20.log`）。旧版 `data\electron\logs\main.log` 不再写入，可手动删除。
+开发版日志位于 `.temp\data\log\`，便携版日志位于 exe 同级 `data\log\`（按日期命名，如 `2026-10-20.log`）。旧版开发数据位于 `.temp\electron\`，不再使用，可手动删除。
 
 ## 注意事项
 
-- Electron `userData` 由 `src/main/util/userDataPath.ts` 在启动最早处重定向：设置 `PORTABLE_EXECUTABLE_DIR` 时到 `data\electron\`，未打包的开发运行到 `.temp\electron\`。该模块必须是 `src/main/index.ts` 的第一个 import。
+- Electron `userData` 由 `src/main/util/userDataPath.ts` 在启动最早处重定向：设置 `PORTABLE_EXECUTABLE_DIR` 时到 `data\electron\`，未打包的开发运行到 `.temp\data\electron\`。该模块必须是 `src/main/index.ts` 的第一个 import。
 - 未打包运行时 userData 目录名来自 `package.json` 顶层 `name`（`booth-atelier`）。
 - `appId` 是 Windows 应用/安装包身份，本项目当前发布的是便携版；未来如启用安装版，修改 `appId` 后须验证原位升级、快捷方式和卸载行为。
 - BOOTH 当前 deeplink 依赖固定 scheme `booth-library-manager://` 与 `client=booth-library-manager`，这两个外部兼容标识不随产品品牌更名。

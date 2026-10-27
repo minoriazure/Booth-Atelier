@@ -6,7 +6,7 @@ import { createAppContext, type AppContext } from './appContext'
 import { registerIpc } from './ipc/handlers'
 import { findProtocolArg, handleProtocolUrl, focusMainWindow, BOOTH_PROTOCOL } from './protocol'
 import { createLogger, onLogWritten } from './util/log'
-import { resolveDataDir } from './util/dataDir'
+import { resolveDataDir, resolveDevRoot } from './util/dataDir'
 import { cleanupLogs } from './services/logService'
 
 const log = createLogger('main')
@@ -231,13 +231,16 @@ if (!gotLock) {
     }
 
     // portable 模式：所有工作文件（DB/图片/默认下载）都在 exe 同级目录，整体打包即可带走。
-    // 非 portable（dev / 安装版）：沿用 userData。
+    // 开发运行：仓库内 .temp\ 作为等价根（data\、downloads\、deleted\ 布局与便携版一致）。
+    // 非 portable 安装版：沿用 userData。
     const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
-    const exeDir = portableDir ?? dirname(app.getPath('exe'))
+    const devRoot = portableDir ? null : resolveDevRoot()
+    const storageRoot = portableDir ?? devRoot
+    const exeDir = storageRoot ?? dirname(app.getPath('exe'))
     const dataDir = resolveDataDir()
     const cookiesPath = resolveDefaultCookiesPath()
-    // 默认下载根：portable → exe 同级 downloads/；否则 dataDir/downloads
-    const defaultRoot = portableDir ? resolve(portableDir, 'downloads') : join(dataDir, 'downloads')
+    // 默认下载根：portable / dev → 存储根下 downloads/；安装版 → dataDir/downloads
+    const defaultRoot = storageRoot ? resolve(storageRoot, 'downloads') : join(dataDir, 'downloads')
     const downloadRoot = process.env.BOOTH_DOWNLOAD_ROOT || defaultRoot
 
     try {
@@ -245,7 +248,7 @@ if (!gotLock) {
         dataDir,
         cookiesPath,
         downloadRoot: downloadRoot || undefined,
-        baseDir: portableDir ?? null,
+        baseDir: storageRoot,
         deletedRoot: resolve(exeDir, 'deleted')
       })
     } catch (e) {

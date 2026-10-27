@@ -124,5 +124,5 @@ GET https://booth.pm/downloadables/{id}/deeplink?client=booth-library-manager&va
 
 - 当前版本号以 `package.json` 的 `version` 为准。
 - 产物名为 `BoothAtelier-<version>-portable.exe`。
-- `package.json` 的 `name` 是 npm 包标识；`build.appId` 是 Windows 应用身份。便携版启动时（`src/main/util/userDataPath.ts`）将 Electron `userData` 重定向到 exe 同级 `data\electron\`；开发运行重定向到仓库内 `.temp\electron\`。两者都不写入 `%APPDATA%`。
+- `package.json` 的 `name` 是 npm 包标识；`build.appId` 是 Windows 应用身份。便携版启动时（`src/main/util/userDataPath.ts`）将 Electron `userData` 重定向到 exe 同级 `data\electron\`；开发运行重定向到仓库内 `.temp\data\electron\`，开发数据根 `.temp\` 与便携版的 exe 同级目录布局一致。两者都不写入 `%APPDATA%`。
 - BOOTH deeplink 的 `booth-library-manager://` scheme 与 `client=booth-library-manager` 是外部兼容标识，必须保持不变；它们不是应用的显示名称。
