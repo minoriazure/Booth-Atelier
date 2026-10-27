@@ -698,10 +698,14 @@ export class LibraryRepo {
     return Number(before?.n ?? 0)
   }
 
-  listPendingImages(limit = 100): Array<{ url: string; itemId: number; kind: string; filename: string }> {
+  /** 图片待下载/失败行分页（按 rowid，供启动与手动检查全量扫描） */
+  listPendingImagePage(
+    afterRowid: number,
+    limit: number
+  ): Array<{ rid: number; url: string; itemId: number; kind: string; filename: string }> {
     return this.db.all(
-      `SELECT url, item_id AS itemId, kind, filename FROM item_images WHERE status IN ('pending','failed') ORDER BY CASE kind WHEN 'thumb' THEN 0 WHEN 'og' THEN 1 ELSE 2 END, updated_at LIMIT ?`,
-      [limit]
+      `SELECT rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images WHERE status IN ('pending','failed') AND rowid > ? ORDER BY rowid LIMIT ?`,
+      [afterRowid, limit]
     )
   }
 

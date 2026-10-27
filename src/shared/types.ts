@@ -169,6 +169,8 @@ export interface Settings {
   autoSyncLibraryOnStartup: boolean
   /** 启动时自动检查文件更新 */
   autoCheckFilesOnStartup: boolean
+  /** 启动时检查并修复图片（补下未完成的原图、补齐缩略图/预览图）；不受 startupCheckIntervalDays 限制 */
+  autoCheckImagesOnStartup: boolean
   /** 主题模式 */
   themeMode: 'dark' | 'light'
   /** 全局主题色（accent，hex） */
@@ -326,6 +328,14 @@ export interface ReconcileResult {
   derivMarked: number
   /** 其中确认缺失派生图文件的条数（用于提示用户） */
   derivMissing: number
+}
+
+/** 全量图片检查结果（含中断遗留的 pending/failed 行的重新入队数） */
+export interface CheckAllImagesResult extends ReconcileResult {
+  /** 扫描到的 pending/failed 行数 */
+  pendingScanned: number
+  /** 本次真正入队下载的条数 */
+  pendingQueued: number
 }
 
 /** 全文件列表行（更新与下载页，qBittorrent 风格） */

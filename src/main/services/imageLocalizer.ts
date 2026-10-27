@@ -2,7 +2,7 @@ import { createHash } from 'crypto'
 import { existsSync, mkdirSync, statSync, writeFileSync, renameSync } from 'fs'
 import { join, extname, basename } from 'path'
 import sharp from 'sharp'
-import type { ImageProgress, DerivativeProgress, ReconcileProgress, ReconcileResult } from '../../shared/types'
+import type { ImageProgress, DerivativeProgress, ReconcileProgress, ReconcileResult, CheckAllImagesResult } from '../../shared/types'
 import type { HttpClient } from '../booth/httpClient'
 import type { LibraryRepo, ImageRef, DerivStatus } from '../db/repos'
 import type { Paths } from '../util/paths'
@@ -489,8 +489,8 @@ export class ImageLocalizer {
   async reconcileImages(scope?: { itemId: number }): Promise<ReconcileResult> {
     const result: ReconcileResult = { checked: 0, redownload: 0, derivMarked: 0, derivMissing: 0 }
     if (this.disposed) return result
-    if (!existsSync(this.paths.rootPath)) {
-      log.warn('reconcileImages skipped: library root missing')
+    if (!existsSync(this.paths.dataRootPath)) {
+      log.warn('reconcileImages skipped: library data root missing')
       return result
     }
     const itemId = scope?.itemId
@@ -552,10 +552,10 @@ export class ImageLocalizer {
     return r
   }
 
-  /** 手动修复：清零派生失败计数后做一次完整对账并重新补齐 */
-  async repairDerivatives(): Promise<ReconcileResult & { reset: number }> {
+  /** 手动修复：清零派生失败计数后做一次全量检查（补下 pending + 对账）并重新补齐派生图 */
+  async repairDerivatives(): Promise<CheckAllImagesResult & { reset: number }> {
     const reset = this.repo.resetDerivativeAttempts()
-    const r = await this.reconcileImages()
+    const r = await this.checkAllImages()
     this.startThumbBackfill()
     return { reset, ...r }
   }
@@ -628,23 +628,47 @@ export class ImageLocalizer {
     this.pump()
   }
 
-  /** 启动时把历史遗留 pending/failed 的图重新入队 */
-  requeuePending(limit = 2000): void {
+  /**
+   * 把中断遗留的 pending/failed 图片重新入队（分页扫描，不设上限）。
+   * 文件已存在的直接标记完成；其余按 rowid 顺序入队下载。返回真实入队数。
+   */
+  requeuePending(): { scanned: number; queued: number } {
     this.flushStatus()
-    const rows = this.repo.listPendingImages(limit)
-    for (const r of rows) {
-      if (this.queue.some((q) => q.url === r.url)) continue
-      // 已存在本地文件的直接标记完成
-      const p = this.localPath(r.itemId, r.filename)
-      if (existsSync(p) && statSync(p).size > 0) {
-        this.bufferStatus(r.url, 'done', statSync(p).size)
-        continue
+    let afterRowid = 0
+    let scanned = 0
+    let queued = 0
+    for (;;) {
+      const rows = this.repo.listPendingImagePage(afterRowid, 500)
+      if (rows.length === 0) break
+      afterRowid = rows[rows.length - 1].rid
+      for (const r of rows) {
+        scanned++
+        const p = this.localPath(r.itemId, r.filename)
+        if (fileOk(p)) {
+          this.bufferStatus(r.url, 'done', statSync(p).size)
+          continue
+        }
+        if (this.queue.some((q) => q.url === r.url) || this.activeUrls.has(r.url)) continue
+        this.enqueue(r, 0)
+        queued++
       }
-      this.enqueue(r, 0)
+      this.flushStatus()
     }
-    log.info(`requeued ${this.queue.length} pending images (${rows.length} rows scanned)`)
+    log.info(`requeued ${queued} pending images (${scanned} rows scanned)`)
     this.flushStatus()
+    return { scanned, queued }
   }
+
+  /**
+   * 全量图片检查（手动「检查图片」与启动时共用）：
+   * 先把中断遗留的 pending/failed 行补入队列，再对已完成行做原图/派生图对账。
+   */
+  async checkAllImages(): Promise<CheckAllImagesResult> {
+    const { scanned, queued } = this.requeuePending()
+    const r = await this.reconcileImages()
+    return { ...r, pendingScanned: scanned, pendingQueued: queued }
+  }
+
 
   dispose(): void {
     // 先停队列再刷状态：防止 DB 关闭后仍有 in-flight 写入

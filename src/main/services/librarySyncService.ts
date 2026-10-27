@@ -154,10 +154,8 @@ export class LibrarySyncService {
         }
       }
 
-      // 把历史遗留的 pending 图片重新入队（含旧商品缩略图）
-      this.images.requeuePending()
-      // 增量对账：核对已下载图片与派生图文件是否与 DB 一致（后台分页执行，不阻塞同步结束）
-      this.images.reconcileImages().catch((e) => log.warn('image reconcile failed:', e instanceof Error ? e.message : e))
+      // 增量对账：补入队中断遗留的 pending 图片，并核对已下载图片与派生图文件（后台分页执行，不阻塞同步结束）
+      this.images.checkAllImages().catch((e) => log.warn('image check failed:', e instanceof Error ? e.message : e))
 
       this.repo.setSetting('lastLibrarySyncAt', new Date().toISOString())
       log.info(`library sync done: ${JSON.stringify(summary)}`)

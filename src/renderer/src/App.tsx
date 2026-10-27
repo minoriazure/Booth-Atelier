@@ -84,6 +84,13 @@ export default function App() {
   useEffect(() => {
     void api.settings.get().then(setSettings)
     void api.auth.check().then((r) => applyAuthResult(r))
+    // 启动图片检查：renderer 挂载后触发，结果直接用 toast 展示（与手动检查一致）
+    void api.images
+      .startupCheck()
+      .then((r) => {
+        if (r) pushToast('info', `启动图片检查：扫描 ${r.pendingScanned} 张未完成图片，补入队 ${r.pendingQueued} 张`)
+      })
+      .catch((e) => pushToast('error', `启动图片检查失败：${e instanceof Error ? e.message : e}`))
     // 深链宿主自检（本地操作，无需等待 settings）：需要询问时弹应用内弹窗
     void api.protocol
       .hostStatus()

@@ -106,7 +106,9 @@ export interface BoothAPI {
   images: {
     enqueueItem(itemId: number): Promise<number>
     prioritize(itemIds: number[]): Promise<number>
-    repair(): Promise<{ resetCount: number; checked: number; redownload: number; derivMarked: number }>
+    repair(): Promise<{ resetCount: number; checked: number; redownload: number; derivMarked: number; pendingQueued: number }>
+    /** 启动图片检查（每次启动仅执行一次；未开启或已执行过则返回 null） */
+    startupCheck(): Promise<{ pendingQueued: number; pendingScanned: number } | null>
     /** 商品详情页单品检查：本地核对，发现缺失即自动补齐 */
     checkItem(itemId: number): Promise<ReconcileResult>
   }
@@ -218,7 +220,8 @@ const api: BoothAPI = {
     enqueueItem: (itemId) => ipcRenderer.invoke('images:enqueueItem', itemId),
     prioritize: (itemIds) => ipcRenderer.invoke('images:prioritize', itemIds),
     checkItem: (itemId) => ipcRenderer.invoke('images:checkItem', itemId),
-    repair: () => ipcRenderer.invoke('images:repair')
+    repair: () => ipcRenderer.invoke('images:repair'),
+    startupCheck: () => ipcRenderer.invoke('images:startupCheck')
   },
   videos: {
     checkYtDlp: (invalidate) => ipcRenderer.invoke('videos:checkYtDlp', invalidate ?? false),

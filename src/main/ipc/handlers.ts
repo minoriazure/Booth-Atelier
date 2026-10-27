@@ -213,11 +213,31 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     return list.length
   })
 
+  // 启动图片检查：由 renderer 挂载后触发（保证弹窗能被收到），每次启动只执行一次
+  let startupImageCheckStarted = false
+  handle('images:startupCheck', async () => {
+    if (startupImageCheckStarted) return null
+    startupImageCheckStarted = true
+    if (process.env.BOOTH_NO_STARTUP) return null
+    if (!ctx.settings.get().autoCheckImagesOnStartup) return null
+    const r = await ctx.imageLocalizer.checkAllImages()
+    log.info(`startup image check: pending queued ${r.pendingQueued}/${r.pendingScanned}, redownload ${r.redownload}`)
+    return { pendingQueued: r.pendingQueued, pendingScanned: r.pendingScanned }
+  })
+
   // 手动修复：清零派生图失败计数，完整对账原图与缩略图/预览图（缺失则重下/重生成）
   handle('images:repair', async () => {
     const r = await ctx.imageLocalizer.repairDerivatives()
-    log.info(`manual image repair: reset ${r.reset}, checked ${r.checked}, redownload ${r.redownload}, derivative marked ${r.derivMarked}`)
-    return { resetCount: r.reset, checked: r.checked, redownload: r.redownload, derivMarked: r.derivMarked }
+    log.info(
+      `manual image repair: reset ${r.reset}, pending queued ${r.pendingQueued}/${r.pendingScanned}, checked ${r.checked}, redownload ${r.redownload}, derivative marked ${r.derivMarked}`
+    )
+    return {
+      resetCount: r.reset,
+      checked: r.checked,
+      redownload: r.redownload,
+      derivMarked: r.derivMarked,
+      pendingQueued: r.pendingQueued
+    }
   })
 
   // 可见商品优先生成派生图（卡片进入可视区 / 打开详情时调用，单次最多 50 个）

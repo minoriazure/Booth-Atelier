@@ -157,7 +157,7 @@ export default function SettingsPage({
                 setRepairing(true)
                 api.images
                   .repair()
-                  .then((r) => toast('info', `已开始检查图片：重置 ${r.resetCount} 条失败记录，缺失的原图将重新下载、缩略图将重新生成`))
+                  .then((r) => toast('info', `已开始检查图片：重置 ${r.resetCount} 条失败记录，补入队 ${r.pendingQueued} 张未完成的原图，缺失的原图将重新下载、缩略图将重新生成`))
                   .catch((e) => toast('error', `修复失败：${e instanceof Error ? e.message : e}`))
                   .finally(() => setRepairing(false))
               }}
@@ -361,6 +361,20 @@ export default function SettingsPage({
               <span className="slider" />
             </label>
             <span className="hint">检查所有下载链接的文件版本，发现更新自动下载</span>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="label">启动时检查并修复图片</div>
+          <div className="value">
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={settings.autoCheckImagesOnStartup}
+                onChange={(e) => void patch({ autoCheckImagesOnStartup: e.target.checked })}
+              />
+              <span className="slider" />
+            </label>
+            <span className="hint">启动时补下上次未完成的原图，并补齐缺失的缩略图/预览图；不受检查间隔限制</span>
           </div>
         </div>
         <div className="setting-row">

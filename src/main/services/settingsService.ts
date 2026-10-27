@@ -7,6 +7,7 @@ import type { Paths } from '../util/paths'
 const DEFAULTS: Omit<Settings, 'downloadRoot' | 'downloadRootMissing'> = {
   autoSyncLibraryOnStartup: true,
   autoCheckFilesOnStartup: true,
+  autoCheckImagesOnStartup: true,
   themeMode: 'dark',
   themeAccent: '#4c8dff',
   startupCheckIntervalDays: 7,
