@@ -142,23 +142,28 @@ function ZoomViewer({ src, onClose }: { src: string; onClose: () => void }) {
 /** 画廊：大图 + 左右循环切换 + 缩略图条（滚动/点击跳转），仿 BOOTH 网页端 */
 function Gallery({
   images,
-  videos
+  videos,
+  onVideoPlaceholderClick
 }: {
   images: Array<{ url: string; mediaUrl: string | null; previewMediaUrl: string | null; thumbMediaUrl: string | null }>
   videos: ItemVideo[]
+  onVideoPlaceholderClick: () => void
 }) {
-  // 画廊条目：图片（底层 thumb 360、清晰层 preview 720、放大用原图 orig）+ 已下载视频
+  // 画廊条目：视频在前（与 BOOTH 网页一致）；未下载视频以封面占位；图片（底层 thumb 360、清晰层 preview 720、放大用原图 orig）
   const slides = useMemo(() => {
     const imgs = images.map((g) => ({
       type: 'image' as const,
       src: g.previewMediaUrl || g.mediaUrl || g.url,
-      orig: g.mediaUrl || g.url,
+      orig: g.mediaUrl || g.previewMediaUrl || null,
       thumb: g.thumbMediaUrl
     }))
-    const vids = videos
-      .filter((v) => v.status === 'downloaded' && v.localPath)
-      .map((v) => ({ type: 'video' as const, src: toMedia(v.localPath!), orig: null, thumb: null, key: v.key }))
-    return [...imgs, ...vids]
+    const cover = images[0] ? images[0].thumbMediaUrl || images[0].previewMediaUrl || images[0].url : null
+    const vids = videos.map((v) =>
+      v.status === 'downloaded' && v.localPath
+        ? { type: 'video' as const, src: toMedia(v.localPath), orig: null, thumb: v.thumbMediaUrl ?? null, key: v.key }
+        : { type: 'placeholder' as const, src: cover ?? '', orig: null, thumb: cover, key: v.key }
+    )
+    return [...vids, ...imgs]
   }, [images, videos])
 
   const [idx, setIdx] = useState(0)
@@ -168,6 +173,7 @@ function Gallery({
   const stripRef = useRef<HTMLDivElement>(null)
   const thumbRefs = useRef<Array<HTMLDivElement | null>>([])
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([])
+  const imgRefs = useRef<Array<HTMLImageElement | null>>([])
 
   useEffect(() => {
     if (idx >= slides.length) setIdx(0)
@@ -189,10 +195,27 @@ function Gallery({
   const [broken, setBroken] = useState<Record<number, boolean>>({})
   // 清晰层（preview）是否已加载完成（用于淡入）；离开「当前 ± 1」窗口后剪枝
   const [loaded, setLoaded] = useState<Record<number, boolean>>({})
+  // 以资源 key 为重置依据（而非 slides 引用），父组件重渲染不会清空已加载状态
+  const slideKey = slides.map((s) => s.src).join('\n')
   useEffect(() => {
     setBroken({})
     setLoaded({})
-  }, [slides])
+  }, [slideKey])
+
+  // 已缓存图片不会再次触发 onLoad，因此每次渲染按 complete 直接标记就绪
+  useEffect(() => {
+    const done: number[] = []
+    imgRefs.current.forEach((el, i) => {
+      if (el && el.complete && el.naturalWidth > 0) done.push(i)
+    })
+    if (done.length === 0) return
+    setLoaded((prev) => {
+      if (done.every((i) => prev[i])) return prev
+      const next = { ...prev }
+      for (const i of done) next[i] = true
+      return next
+    })
+  })
 
   useEffect(() => {
     setLoaded((prev) => {
@@ -239,7 +262,12 @@ function Gallery({
               const near = distance(i) <= 1
               return (
                 <div key={i} className="gallery2-slide" aria-hidden={i !== idx}>
-                  {s.type === 'video' ? (
+                  {s.type === 'placeholder' ? (
+                    <button type="button" className="gallery2-video-placeholder" onClick={onVideoPlaceholderClick} title="视频未下载，点击前往视频卡片">
+                      {s.thumb && <img src={s.thumb} alt="" />}
+                      <span className="gallery2-video-play">▶</span>
+                    </button>
+                  ) : s.type === 'video' ? (
                     near && (
                       <video
                         ref={(el) => {
@@ -259,6 +287,9 @@ function Gallery({
                       {s.thumb && <img className="gallery2-underlay" src={s.thumb} alt="" />}
                       {near && (
                         <img
+                          ref={(el) => {
+                            imgRefs.current[i] = el
+                          }}
                           className={`zoomable gallery2-full${loaded[i] ? ' loaded' : ''}`}
                           src={s.src}
                           alt=""
@@ -293,8 +324,20 @@ function Gallery({
               }}
               onClick={() => go(i)}
             >
-              {/* 缩略图条：thumb 360，缺失时回退 preview 720 */}
-              {s.type === 'video' ? <span className="thumb-video">▶</span> : <img src={s.thumb || s.src} loading="lazy" alt="" />}
+              {/* 缩略图条：视频用同目录 -thumb.jpg（缺失为纯灰底），占位为变暗封面 */}
+              {s.type === 'video' ? (
+                <>
+                  {s.thumb ? <img src={s.thumb} loading="lazy" alt="" /> : <span className="thumb-fallback" />}
+                  <span className="thumb-video thumb-video-dim">▶</span>
+                </>
+              ) : s.type === 'placeholder' ? (
+                <>
+                  {s.thumb && <img className="thumb-grey" src={s.thumb} loading="lazy" alt="" />}
+                  <span className="thumb-video thumb-video-dim">▶</span>
+                </>
+              ) : (
+                <img src={s.thumb || s.src} loading="lazy" alt="" />
+              )}
             </div>
           ))}
         </div>
@@ -437,6 +480,20 @@ export default function ItemDetailPage({
     })
     return un
   }, [itemId, load])
+
+  // 已下载但缩略图缺失：用本地视频补生成（每个视频每次进入页面只请求一次）
+  const thumbAsked = useRef(new Set<string>())
+  useEffect(() => {
+    if (!item) return
+    for (const v of item.videos) {
+      if (v.status !== 'downloaded' || v.thumbMediaUrl || thumbAsked.current.has(v.key)) continue
+      thumbAsked.current.add(v.key)
+      void api.videos.ensureThumb(v.key).then((url) => {
+        if (!url) return
+        setVideoStates((prev) => ({ ...prev, [v.key]: { ...(prev[v.key] ?? v), thumbMediaUrl: url } }))
+      })
+    }
+  }, [item])
 
   // 视频进度
   useEffect(() => {
@@ -616,10 +673,24 @@ export default function ItemDetailPage({
     return () => ro.disconnect()
   }, [item])
 
-  if (!item) return <div className="empty">加载商品…</div>
+  // 稳定引用：每次渲染新建数组会使画廊的 slides 变化，进而重置加载状态
+  const videoListRef = useRef<HTMLDivElement>(null)
+  const scrollToVideos = useCallback(() => videoListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), [])
+  const galleryForShow = useMemo(
+    () =>
+      item
+        ? item.localGallery.length
+          ? item.localGallery
+          : (item.galleryUrls || []).map((u) => ({ url: u, mediaUrl: null, previewMediaUrl: null, thumbMediaUrl: null }))
+        : [],
+    [item]
+  )
+  const videos = useMemo(
+    () => (item ? item.videos.map((v) => ({ ...v, ...(videoStates[v.key] || {}) })) : []),
+    [item, videoStates]
+  )
 
-  const galleryForShow = item.localGallery.length ? item.localGallery : (item.galleryUrls || []).map((u) => ({ url: u, mediaUrl: null, previewMediaUrl: null, thumbMediaUrl: null }))
-  const videos = item.videos.map((v) => ({ ...v, ...(videoStates[v.key] || {}) }))
+  if (!item) return <div className="empty">加载商品…</div>
 
   return (
     <div className="detail2">
@@ -659,7 +730,7 @@ export default function ItemDetailPage({
       <div className="detail2-grid">
         {/* ── 左列：画廊 + 描述 ── */}
         <div className="detail2-main">
-          <Gallery images={galleryForShow} videos={videos} />
+          <Gallery images={galleryForShow} videos={videos} onVideoPlaceholderClick={scrollToVideos} />
 
           {videos.length > 0 && ytDlpOk === false && (
             <div className="panel warn-panel">
@@ -691,7 +762,7 @@ export default function ItemDetailPage({
           {videos.length > 0 && (
             <div className="section-title">商品视频（{videos.length}）</div>
           )}
-          <div className="video-list">
+          <div className="video-list" ref={videoListRef}>
             {videos.map((v) => (
               <VideoCard key={v.key} video={v} onDownload={(k) => void doDownloadVideo(k)} downloading={videoStates[v.key]?.status === 'downloading'} />
             ))}

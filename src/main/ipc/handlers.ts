@@ -7,6 +7,7 @@ import { applyProxySettings, normalizeProxyRules, readWindowsSystemProxy, resolv
 import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
 import { listDays, readDay, searchLogs, cleanupLogs } from '../services/logService'
+import { videoThumbPath } from '../services/videoThumb'
 import type { ProxyTestResult } from '../../shared/types'
 import { LOG_LEVELS } from '../../shared/types'
 
@@ -166,7 +167,8 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
       localPath: v.localPath,
       status: v.status as never,
       progress: v.status === 'downloaded' ? 100 : 0,
-      error: null
+      error: null,
+      thumbMediaUrl: v.localPath && existsSync(videoThumbPath(v.localPath)) ? tryMedia(videoThumbPath(v.localPath)) : null
     }))
     return detail
   })
@@ -242,6 +244,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   })
   handle('videos:list', (itemId: unknown) => ctx.repo.listVideosByItem(id.parse(itemId)))
   handle('videos:download', async (key?: unknown) => ctx.videos.download(q.parse(key)))
+  handle('videos:ensureThumb', async (key?: unknown) => tryMedia(await ctx.videos.ensureThumb(q.parse(key))))
   handle('videos:reveal', (p?: unknown) => shell.showItemInFolder(q.parse(p)))
   handle('library:openItemPage', (itemId: unknown) => {
     shell.openExternal(`https://booth.pm/zh-cn/items/${id.parse(itemId)}`)

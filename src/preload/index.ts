@@ -115,6 +115,7 @@ export interface BoothAPI {
     list(itemId: number): Promise<ItemVideo[]>
     download(key: string): Promise<{ ok: boolean; path?: string; error?: string }>
     reveal(path: string): Promise<void>
+    ensureThumb(key: string): Promise<string | null>
   }
   dialog: {
     chooseDir(): Promise<string | null>
@@ -223,7 +224,8 @@ const api: BoothAPI = {
     checkYtDlp: (invalidate) => ipcRenderer.invoke('videos:checkYtDlp', invalidate ?? false),
     list: (itemId) => ipcRenderer.invoke('videos:list', itemId),
     download: (key) => ipcRenderer.invoke('videos:download', key),
-    reveal: (path) => ipcRenderer.invoke('videos:reveal', path)
+    reveal: (path) => ipcRenderer.invoke('videos:reveal', path),
+    ensureThumb: (key) => ipcRenderer.invoke('videos:ensureThumb', key)
   },
   dialog: {
     chooseDir: () => ipcRenderer.invoke('dialog:chooseDir'),

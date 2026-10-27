@@ -6,6 +6,7 @@ import type { Paths } from '../util/paths'
 import { sanitizeFilename } from '../util/filenames'
 import { resolveSystemProxy } from '../booth/systemFetch'
 import { createLogger } from '../util/log'
+import { generateVideoThumb, videoThumbPath } from './videoThumb'
 
 const log = createLogger('videoService')
 
@@ -28,6 +29,8 @@ export class VideoService {
   onProgress: ((e: VideoProgressEvent) => void) | null = null
   private ytDlpCache: { checked: boolean; path: string | null } = { checked: false, path: null }
   private active = new Set<string>()
+  /** 进行中的缩略图生成任务（按视频文件路径去重，下载完成与详情页补生成可能并发） */
+  private thumbJobs = new Map<string, Promise<string | null>>()
 
   constructor(
     private repo: LibraryRepo,
@@ -184,11 +187,30 @@ export class VideoService {
           return
         }
         this.repo.setVideoStatus(key, 'downloaded', file)
+        void this.ensureThumbFor(file)
         this.onProgress?.({ key, itemId: itemId2, progress: 100, status: 'downloaded', localPath: file })
         log.info(`video done: ${vdesc} file=${file} (${statSync(file).size} bytes)`)
         resolve({ ok: true, path: file })
       })
     })
+  }
+
+  /** 已下载视频的缩略图：已存在直接返回，缺失则从本地视频重新生成；未下载返回 null */
+  async ensureThumb(key: string): Promise<string | null> {
+    const itemId = this.findItemOfVideo(key)
+    const v = this.repo.listVideosByItem(itemId).find((x) => x.key === key)
+    if (!v || v.status !== 'downloaded' || !v.localPath || !existsSync(v.localPath)) return null
+    return this.ensureThumbFor(v.localPath)
+  }
+
+  private ensureThumbFor(videoFile: string): Promise<string | null> {
+    const thumb = videoThumbPath(videoFile)
+    if (existsSync(thumb)) return Promise.resolve(thumb)
+    const running = this.thumbJobs.get(videoFile)
+    if (running) return running
+    const job = generateVideoThumb(videoFile).finally(() => this.thumbJobs.delete(videoFile))
+    this.thumbJobs.set(videoFile, job)
+    return job
   }
 
   /** key → itemId 反查（DB 里 video 行有 item_id，但列表接口没带；直接查） */

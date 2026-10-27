@@ -245,6 +245,8 @@ export interface ItemVideo {
   embedUrl: string
   /** 本地已下载的文件绝对路径 */
   localPath: string | null
+  /** 视频封面缩略图（与视频同目录 {base}-thumb.jpg）的渲染层地址；缺失为 null */
+  thumbMediaUrl?: string | null
   status: 'remote' | 'downloading' | 'downloaded' | 'failed'
   progress: number
   error?: string | null

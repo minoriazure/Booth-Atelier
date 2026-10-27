@@ -17,7 +17,7 @@ let ctx: AppContext | null = null
 // 自定义协议：image-cache://<encodeURIComponent(absPath)> → 本地图片
 function registerProtocols(): void {
   protocol.registerSchemesAsPrivileged([
-    { scheme: 'image-cache', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
+    { scheme: 'image-cache', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } }
   ])
 }
 
@@ -66,7 +66,8 @@ function setupImageProtocol(): void {
               'Content-Type': mime,
               'Content-Length': String(end - start + 1),
               'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-              'Accept-Ranges': 'bytes'
+              'Accept-Ranges': 'bytes',
+              'Access-Control-Allow-Origin': '*'
             }
           })
         )
@@ -75,7 +76,7 @@ function setupImageProtocol(): void {
       return Promise.resolve(
         new Response(stream as unknown as ReadableStream, {
           status: 200,
-          headers: { 'Content-Type': mime, 'Content-Length': String(stat.size), 'Accept-Ranges': 'bytes' }
+          headers: { 'Content-Type': mime, 'Content-Length': String(stat.size), 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*' }
         })
       )
     } catch {

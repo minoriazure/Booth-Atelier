@@ -1372,6 +1372,58 @@ button.danger-solid:hover:not(:disabled) {
   font-size: 20px;
   color: var(--accent);
 }
+.gallery2-thumb {
+  position: relative;
+}
+.thumb-grey {
+  filter: brightness(0.7);
+}
+.thumb-video-dim {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  pointer-events: none;
+}
+.thumb-fallback {
+  position: absolute;
+  inset: 0;
+  background: #808080;
+}
+
+/* 未下载视频的画廊占位：封面灰化 + 半透明 ▶，点击跳转到视频卡片 */
+.gallery2-video-placeholder {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: #000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.gallery2-video-placeholder img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: brightness(0.7);
+}
+.gallery2-video-play {
+  position: relative;
+  font-size: 64px;
+  color: #fff;
+  opacity: 0.75;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+.gallery2-video-placeholder:hover .gallery2-video-play {
+  opacity: 1;
+}
 
 /* ── 右侧下载管理侧栏 ── */
 .detail2-side {
