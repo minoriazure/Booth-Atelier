@@ -129,6 +129,10 @@ export interface BoothAPI {
     /** 用户对应用内弹窗的决定：register=注册为本程序；decline=不注册并关闭检查开关 */
     hostDecision(decision: 'register' | 'decline'): Promise<{ registered: boolean; autoRegister: boolean }>
   }
+  shell: {
+    /** 用系统浏览器打开外部链接（仅 http / https） */
+    openExternal(url: string): Promise<void>
+  }
   system: {
     /** 系统代理状态（如 "HTTP 127.0.0.1:7890" / "DIRECT"），下载会自动遵循 */
     proxyInfo(): Promise<string | null>
@@ -237,6 +241,9 @@ const api: BoothAPI = {
   protocol: {
     hostStatus: () => ipcRenderer.invoke('protocol:hostStatus'),
     hostDecision: (decision) => ipcRenderer.invoke('protocol:hostDecision', decision)
+  },
+  shell: {
+    openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url)
   },
   system: {
     proxyInfo: () => ipcRenderer.invoke('system:proxyInfo'),

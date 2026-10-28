@@ -1654,6 +1654,8 @@ button.danger-solid:hover:not(:disabled) {
 }
 .desc-html a {
   color: var(--accent);
+  cursor: pointer;
+  word-break: break-all;
 }
 .desc-html iframe {
   max-width: 100%;

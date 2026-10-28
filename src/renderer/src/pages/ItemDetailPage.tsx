@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { FileHistoryGroup, ItemDetailRow, ItemVideo, SnapshotDetail, SnapshotEntry } from '../../../shared/types'
 import type { VideoProgressEvent } from '../../../preload/index'
 import DeleteItemDialog from '../components/DeleteItemDialog'
@@ -835,6 +835,23 @@ export default function ItemDetailPage({
 
   if (!item) return <div className="empty">加载商品…</div>
 
+  // 描述链接：单击不跳转（避免误触离开应用），双击才交给系统浏览器打开；视频卡片内的链接不受影响
+  const descLinkOf = (target: EventTarget): HTMLAnchorElement | null => {
+    const a = (target as HTMLElement).closest<HTMLAnchorElement>('a[href]')
+    if (!a || a.closest('.video-slot')) return null
+    return a
+  }
+  const onDescClick = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (descLinkOf(e.target)) e.preventDefault()
+  }
+  const onDescDoubleClick = (e: ReactMouseEvent<HTMLDivElement>) => {
+    const a = descLinkOf(e.target)
+    if (!a) return
+    e.preventDefault()
+    void api.shell.openExternal(a.href).catch(() => {})
+  }
+
+
   return (
     <div className="detail2">
       <div className="detail2-top">
@@ -897,6 +914,8 @@ export default function ItemDetailPage({
           <div
             className="desc desc-html"
             ref={descRef}
+            onClick={onDescClick}
+            onDoubleClick={onDescDoubleClick}
             // 处理后的描述 HTML（图片已指向本地；iframe 已替换为占位）
             dangerouslySetInnerHTML={{ __html: processedDesc }}
           />

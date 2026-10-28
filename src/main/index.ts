@@ -8,6 +8,7 @@ import { findProtocolArg, handleProtocolUrl, focusMainWindow, BOOTH_PROTOCOL } f
 import { createLogger, onLogWritten } from './util/log'
 import { resolveDataDir, resolveDevRoot } from './util/dataDir'
 import { cleanupLogs } from './services/logService'
+import { isWebUrl } from './util/externalUrl'
 
 const log = createLogger('main')
 
@@ -114,12 +115,20 @@ function createWindow(): void {
   })
 
   // 页面内 <a href="booth-library-manager://..."> 直接点击（非 window.open）也要拦截
+  // 普通外部 http(s) 链接单击时同样不能让主窗口跳走，交给系统浏览器
+  const devOrigin = process.env.ELECTRON_RENDERER_URL ? new URL(process.env.ELECTRON_RENDERER_URL).origin : null
   mainWindow.webContents.on('will-navigate', (e, url) => {
     if (url.startsWith(`${BOOTH_PROTOCOL}:`)) {
       e.preventDefault()
       void deliverProtocolUrl(url)
+      return
+    }
+    if (isWebUrl(url) && new URL(url).origin !== devOrigin) {
+      e.preventDefault()
+      void shell.openExternal(url)
     }
   })
+
 
   // 注意：这里故意不加载 renderer —— 窗口先可见（深链冷启动等失焦），
   // loadMainWindow() 在 registerIpc 之后再调用（renderer 挂载即 settings:get）

@@ -29,8 +29,34 @@ export function buildBoothDescHtml(html: string, opts: BoothDescOptions): string
     // 未知 iframe 保留（如 booth 自家），但加安全限制
     return m.replace(/src=/, 'sandbox="allow-scripts allow-same-origin allow-popups" src=')
   })
-  return sanitizeDesc(out)
+  return sanitizeDesc(linkifyText(out))
 }
+
+const BARE_URL_RE = /https?:\/\/(?:[^\s<>"'&]|&amp;)+/g
+const URL_TRAILING_RE = /(&amp;|[.,;:!?)\]）】。、])+$/i
+
+/** 把文本中未包裹在 <a> 内的裸网址包装为链接（不改动标签与属性） */
+export function linkifyText(html: string): string {
+  let anchorDepth = 0
+  return html
+    .split(/(<[^>]*>)/)
+    .map((part) => {
+      if (part.startsWith('<')) {
+        if (/^<a[\s>]/i.test(part)) anchorDepth++
+        else if (/^<\/a\s*>/i.test(part)) anchorDepth = Math.max(0, anchorDepth - 1)
+        return part
+      }
+      if (anchorDepth > 0) return part
+      return part.replace(BARE_URL_RE, (raw) => {
+        const trail = raw.match(URL_TRAILING_RE)?.[0] ?? ''
+        const url = raw.slice(0, raw.length - trail.length)
+        if (!url) return raw
+        return `<a href="${url}" rel="noreferrer">${url}</a>${trail}`
+      })
+    })
+    .join('')
+}
+
 
 /** 按 src 反查视频 */
 export function findVideoBySrc(videos: ItemVideo[], src: string): ItemVideo | null {

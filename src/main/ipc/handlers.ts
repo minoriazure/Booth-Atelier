@@ -8,6 +8,7 @@ import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
 import { listDays, readDay, searchLogs, cleanupLogs } from '../services/logService'
 import { videoThumbPath } from '../services/videoThumb'
+import { isWebUrl } from '../util/externalUrl'
 import type { ProxyTestResult } from '../../shared/types'
 import { LOG_LEVELS } from '../../shared/types'
 
@@ -272,6 +273,12 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   handle('videos:reveal', (p?: unknown) => shell.showItemInFolder(q.parse(p)))
   handle('library:openItemPage', (itemId: unknown) => {
     shell.openExternal(`https://booth.pm/zh-cn/items/${id.parse(itemId)}`)
+  })
+
+  // 描述里的外部链接：只放行 http/https，其余协议直接拒绝
+  handle('shell:openExternal', async (url: unknown) => {
+    if (!isWebUrl(url)) throw new Error('仅支持 http / https 链接')
+    await shell.openExternal(url)
   })
 
   // 打开该商品的下载目录（素材文件所在处，拖 Unity 用）
