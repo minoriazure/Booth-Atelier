@@ -454,32 +454,40 @@ function Gallery({
         {slides[idx]?.removed && <div className="gallery2-removed-badge">远程已移除该图片</div>}
       </div>
       {slides.length > 1 && (
-        <div className="gallery2-strip" ref={stripRef}>
-          {slides.map((s, i) => (
-            <div
-              key={i}
-              className={`gallery2-thumb ${i === idx ? 'active' : ''}${s.removed ? ' removed' : ''}`}
-              ref={(el) => {
-                thumbRefs.current[i] = el
-              }}
-              onClick={() => go(i)}
-            >
-              {/* 缩略图条：视频用同目录 -thumb.jpg（缺失为纯灰底），占位为变暗封面 */}
-              {s.type === 'video' ? (
-                <>
-                  {s.thumb ? <img src={s.thumb} loading="lazy" alt="" /> : <span className="thumb-fallback" />}
-                  <span className="thumb-video thumb-video-dim">▶</span>
-                </>
-              ) : s.type === 'placeholder' ? (
-                <>
-                  {s.thumb && <img className="thumb-grey" src={s.thumb} loading="lazy" alt="" />}
-                  <span className="thumb-video thumb-video-dim">▶</span>
-                </>
-              ) : (
-                <img src={s.thumb || s.src} loading="lazy" alt="" />
-              )}
-            </div>
-          ))}
+        <div className="gallery2-strip-wrap">
+          <button type="button" className="gallery2-strip-nav prev" onClick={() => go(idx - 1)} title="上一张" aria-label="上一张">
+            <ChevronIcon dir="prev" />
+          </button>
+          <div className="gallery2-strip" ref={stripRef}>
+            {slides.map((s, i) => (
+              <div
+                key={i}
+                className={`gallery2-thumb ${i === idx ? 'active' : ''}${s.removed ? ' removed' : ''}`}
+                ref={(el) => {
+                  thumbRefs.current[i] = el
+                }}
+                onClick={() => go(i)}
+              >
+                {/* 缩略图条：视频用同目录 -thumb.jpg（缺失为纯灰底），占位为变暗封面 */}
+                {s.type === 'video' ? (
+                  <>
+                    {s.thumb ? <img src={s.thumb} loading="lazy" alt="" /> : <span className="thumb-fallback" />}
+                    <span className="thumb-video thumb-video-dim">▶</span>
+                  </>
+                ) : s.type === 'placeholder' ? (
+                  <>
+                    {s.thumb && <img className="thumb-grey" src={s.thumb} loading="lazy" alt="" />}
+                    <span className="thumb-video thumb-video-dim">▶</span>
+                  </>
+                ) : (
+                  <img src={s.thumb || s.src} loading="lazy" alt="" />
+                )}
+              </div>
+            ))}
+          </div>
+          <button type="button" className="gallery2-strip-nav next" onClick={() => go(idx + 1)} title="下一张" aria-label="下一张">
+            <ChevronIcon dir="next" />
+          </button>
         </div>
       )}
       {zoomPos >= 0 && (

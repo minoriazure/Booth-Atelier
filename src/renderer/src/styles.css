@@ -1362,10 +1362,42 @@ button.danger-solid:hover:not(:disabled) {
   padding: 3px 9px;
   color: var(--text);
 }
+.gallery2-strip-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 10px;
+}
+.gallery2-strip-nav {
+  flex: 0 0 24px;
+  min-height: 72px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg3);
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.gallery2-strip-nav svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.gallery2-strip-nav:hover {
+  color: var(--text);
+  background: var(--accent);
+  border-color: var(--accent);
+}
 .gallery2-strip {
   display: flex;
+  flex: 1 1 0;
+  min-width: 0;
   gap: 8px;
-  margin-top: 10px;
   overflow-x: auto;
   padding-bottom: 4px;
   scrollbar-width: thin;
