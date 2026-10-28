@@ -1720,7 +1720,7 @@ button.danger-solid:hover:not(:disabled) {
 }
 .zoom-viewer img {
   max-width: 100vw;
-  max-height: 100vh;
+  max-height: 85vh;
   transform-origin: center center;
   will-change: transform;
   pointer-events: auto;
@@ -1795,6 +1795,21 @@ button.danger-solid:hover:not(:disabled) {
 .zoom-hint.show {
   opacity: 1;
   pointer-events: auto;
+}
+/* 计数位于底部控制条激活区（96px）上方，与画廊计数样式一致 */
+.zoom-counter {
+  position: fixed;
+  bottom: 104px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--overlay);
+  border-radius: 4px;
+  padding: 3px 9px;
+  z-index: 310;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
 }
 .zoom-pct {
   font-size: 12px;

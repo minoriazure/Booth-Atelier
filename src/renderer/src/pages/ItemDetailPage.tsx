@@ -51,12 +51,15 @@ function ZoomViewer({
   items,
   index,
   onIndexChange,
-  onClose
+  onClose,
+  counter
 }: {
   items: string[]
   index: number
   onIndexChange: (i: number) => void
   onClose: () => void
+  /** 画廊全部幻灯片中的位置（含视频），与画廊右下角计数一致 */
+  counter?: { current: number; total: number }
 }) {
   const src = items[index]
   const multi = items.length > 1
@@ -253,6 +256,11 @@ function ZoomViewer({
           ✕ 关闭
         </button>
       </div>
+      {counter && counter.total > 1 && (
+        <div className="zoom-counter">
+          {counter.current} / {counter.total}
+        </div>
+      )}
       <div className={`zoom-hint${barsOn ? ' show' : ''}`}>
         滚轮缩放 · 拖拽平移 · 双击复位 · {multi ? '左右边缘切换 · ' : ''}右键 / ESC 关闭
       </div>
@@ -484,6 +492,7 @@ function Gallery({
             go(slide)
           }}
           onClose={() => setZoomSlide(null)}
+          counter={{ current: Math.min((zoomSlide ?? 0) + 1, slides.length), total: slides.length }}
         />
       )}
     </div>
