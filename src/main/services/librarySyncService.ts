@@ -1,6 +1,6 @@
 import type { LibraryCrawler } from '../booth/libraryCrawler'
 import type { ItemPageParser } from '../booth/itemPageParser'
-import { metadataHashOf, extractVideos } from '../booth/itemPageParser'
+import { metadataHashOf, metadataContentChanged, extractVideos } from '../booth/itemPageParser'
 import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { ImageLocalizer } from './imageLocalizer'
@@ -197,15 +197,16 @@ export class LibrarySyncService {
     return { changed }
   }
 
-  /** 写入详情字段（变化时备份旧版本并写新快照）+ 登记图片与视频；返回元数据是否变化 */
+  /** 写入详情字段（简介/标题/封面变化时备份旧版本并写新快照）+ 登记图片与视频；返回是否有快照级变化 */
   private applyDetail(itemId: number, detail: ItemDetail): boolean {
     const hash = metadataHashOf(detail)
     const prev = this.repo.getMetadataHash(itemId)
-    const changed = prev !== hash
+    const old = this.repo.getItemDetail(itemId)
+    // 从未快照过（prev 为空）视为变化；否则仅简介/标题/封面变化才算，画廊增删不计
+    const changed = prev == null || (!!old && metadataContentChanged(old, detail))
     if (changed) {
       // 变化前先备份旧版本（若从未快照过，把当前库里存的旧描述作为首个快照）
       if (prev != null) {
-        const old = this.repo.getItemDetail(itemId)
         if (old && old.descriptionHtml) {
           this.history.writeMetadataSnapshot({
             itemId,
@@ -242,6 +243,8 @@ export class LibrarySyncService {
     if (detail.ogImageUrl) imgList.push({ url: detail.ogImageUrl, kind: 'og' })
     for (const u of detail.galleryUrls) imgList.push({ url: u, kind: 'gallery' })
     if (imgList.length) this.images.registerItemImages(itemId, imgList)
+    // 画廊远程移除标记（仅标记，不删除记录与本地文件）
+    this.repo.syncGalleryRemoval(itemId, detail.galleryUrls)
 
     // 视频登记（描述里内嵌的 iframe/链接）
     const vids = extractVideos(detail.descriptionHtml)

@@ -746,6 +746,27 @@ export class LibraryRepo {
     return this.db.all('SELECT url, filename, status FROM item_images WHERE item_id = ? ORDER BY rowid', [itemId])
   }
 
+  /** 按远程最新画廊列表刷新"远程已移除"标记：不在列表中的画廊图置 1，重新出现的置 0 */
+  syncGalleryRemoval(itemId: number, currentUrls: string[]): void {
+    if (currentUrls.length === 0) return
+    const current = new Set(currentUrls)
+    const rows = this.db.all<{ url: string; removed: number }>(
+      `SELECT url, remote_removed AS removed FROM item_images WHERE item_id = ? AND kind = 'gallery'`,
+      [itemId]
+    )
+    for (const r of rows) {
+      const removed = current.has(r.url) ? 0 : 1
+      if (removed !== r.removed) this.db.run(`UPDATE item_images SET remote_removed = ? WHERE url = ?`, [removed, r.url])
+    }
+  }
+
+  /** 远程已移除的画廊图 URL（按入库顺序） */
+  listRemovedGalleryUrls(itemId: number): string[] {
+    return this.db
+      .all<{ url: string }>(`SELECT url FROM item_images WHERE item_id = ? AND kind = 'gallery' AND remote_removed = 1 ORDER BY rowid`, [itemId])
+      .map((r) => r.url)
+  }
+
   countImagesByItem(itemId: number): { total: number; done: number } {
     const r = this.db.get<{ total: number; done: number }>(
       `SELECT COUNT(*) AS total, SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done FROM item_images WHERE item_id = ?`,

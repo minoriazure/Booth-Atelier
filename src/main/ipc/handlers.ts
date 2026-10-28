@@ -151,11 +151,15 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     const detail = ctx.repo.getItemDetail(rid)
     if (!detail) return null
     detail.localThumb = detail.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolvePreviewLocal(detail.thumbnailUrl)) : null
-    detail.localGallery = detail.galleryUrls.map((u) => ({
+    const removedUrls = ctx.repo.listRemovedGalleryUrls(rid)
+    const removedSet = new Set(removedUrls)
+    const galleryAll = [...detail.galleryUrls, ...removedUrls.filter((u) => !detail.galleryUrls.includes(u))]
+    detail.localGallery = galleryAll.map((u) => ({
       url: u,
       mediaUrl: tryMedia(ctx.imageLocalizer.resolveLocalFor(rid, u)),
       previewMediaUrl: tryMedia(ctx.imageLocalizer.resolvePreviewLocal(u)),
-      thumbMediaUrl: tryMedia(ctx.imageLocalizer.resolveThumbLocal(u))
+      thumbMediaUrl: tryMedia(ctx.imageLocalizer.resolveThumbLocal(u)),
+      removed: removedSet.has(u)
     }))
     ctx.videos.validateLocal(rid)
     detail.videos = ctx.repo.listVideosByItem(rid).map((v) => ({

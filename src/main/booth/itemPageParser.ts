@@ -228,6 +228,21 @@ export function metadataHashOf(d: {
   return sha256Hex(payload)
 }
 
+/**
+ * 是否需要写历史快照：仅比较标题、简介（含简介内图片）、封面。
+ * 画廊增删不触发快照，只静默更新画廊展示。
+ */
+export function metadataContentChanged(
+  prev: { title: string; descriptionHtml: string; ogImageUrl: string | null },
+  next: { title: string; descriptionHtml: string; ogImageUrl: string | null }
+): boolean {
+  return (
+    prev.title !== next.title ||
+    normalizeHtml(prev.descriptionHtml) !== normalizeHtml(next.descriptionHtml) ||
+    prev.ogImageUrl !== next.ogImageUrl
+  )
+}
+
 function normalizeHtml(html: string): string {
   return html.replace(/\s+/g, ' ').trim()
 }

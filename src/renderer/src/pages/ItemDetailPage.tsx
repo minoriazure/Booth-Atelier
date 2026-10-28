@@ -266,7 +266,7 @@ function Gallery({
   videos,
   onVideoPlaceholderClick
 }: {
-  images: Array<{ url: string; mediaUrl: string | null; previewMediaUrl: string | null; thumbMediaUrl: string | null }>
+  images: Array<{ url: string; mediaUrl: string | null; previewMediaUrl: string | null; thumbMediaUrl: string | null; removed?: boolean }>
   videos: ItemVideo[]
   onVideoPlaceholderClick: () => void
 }) {
@@ -276,13 +276,14 @@ function Gallery({
       type: 'image' as const,
       src: g.previewMediaUrl || g.mediaUrl || g.url,
       orig: g.mediaUrl || g.previewMediaUrl || null,
-      thumb: g.thumbMediaUrl
+      thumb: g.thumbMediaUrl,
+      removed: !!g.removed
     }))
     const cover = images[0] ? images[0].thumbMediaUrl || images[0].previewMediaUrl || images[0].url : null
     const vids = videos.map((v) =>
       v.status === 'downloaded' && v.localPath
-        ? { type: 'video' as const, src: toMedia(v.localPath), orig: null, thumb: v.thumbMediaUrl ?? null, key: v.key }
-        : { type: 'placeholder' as const, src: cover ?? '', orig: null, thumb: cover, key: v.key }
+        ? { type: 'video' as const, src: toMedia(v.localPath), orig: null, thumb: v.thumbMediaUrl ?? null, key: v.key, removed: false }
+        : { type: 'placeholder' as const, src: cover ?? '', orig: null, thumb: cover, key: v.key, removed: false }
     )
     return [...vids, ...imgs]
   }, [images, videos])
@@ -442,13 +443,14 @@ function Gallery({
         <div className="gallery2-counter">
           {Math.min(idx + 1, slides.length)} / {slides.length}
         </div>
+        {slides[idx]?.removed && <div className="gallery2-removed-badge">远程已移除该图片</div>}
       </div>
       {slides.length > 1 && (
         <div className="gallery2-strip" ref={stripRef}>
           {slides.map((s, i) => (
             <div
               key={i}
-              className={`gallery2-thumb ${i === idx ? 'active' : ''}`}
+              className={`gallery2-thumb ${i === idx ? 'active' : ''}${s.removed ? ' removed' : ''}`}
               ref={(el) => {
                 thumbRefs.current[i] = el
               }}

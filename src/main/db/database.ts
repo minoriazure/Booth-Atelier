@@ -114,6 +114,13 @@ export class Db {
       this.markDirty()
       log.info('migrations applied: 009_derivative_status')
     }
+    if (Number(version) < 10) {
+      // 画廊图在远程被移除的标记：本地文件与记录保留，仅用于详情页提示
+      this.db.run(`ALTER TABLE item_images ADD COLUMN remote_removed INTEGER NOT NULL DEFAULT 0`)
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (10, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 010_item_images_remote_removed')
+    }
   }
 
   exec(sql: string): void {
