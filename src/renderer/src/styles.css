@@ -276,11 +276,12 @@ select {
 /* ── 图片墙 ── */
 .wall {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(calc(190px * var(--wall-scale, 1)), 1fr));
   gap: 14px;
 }
 .card {
   position: relative;
+  zoom: var(--wall-scale, 1);
   background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1098,6 +1099,23 @@ input.invalid {
 .filter-row .count {
   color: var(--text-dim);
   font-size: 13px;
+}
+/* 卡片大小滑动条（50–150%），位于筛选行，靠排序组左侧 */
+.scale-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 16px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.scale-control input[type='range'] {
+  width: 120px;
+  accent-color: var(--accent);
+}
+.scale-value {
+  min-width: 36px;
+  font-variant-numeric: tabular-nums;
 }
 /* 排序滑块：两段式，靠右；高亮块与其上白字同步平移，文字不会在原地变色 */
 .sort-group {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject } from 'react'
 import type { ItemSummary } from '../../../shared/types'
 import { api } from '../api'
 import { useImageUrl } from '../components/useImageUrl'
@@ -72,6 +72,23 @@ function ItemCard({ item, onOpen }: { item: ItemSummary; onOpen: (id: number) =>
 type SortKey = 'shop' | 'id'
 
 const SORT_STORAGE_KEY = 'booth-wall-sort'
+const SCALE_STORAGE_KEY = 'booth-wall-scale'
+const SCALE_MIN = 50
+const SCALE_MAX = 150
+const SCALE_STEP = 5
+
+function readScale(): number {
+  try {
+    const v = Number(localStorage.getItem(SCALE_STORAGE_KEY))
+    return Number.isFinite(v) && v >= SCALE_MIN && v <= SCALE_MAX ? v : 100
+  } catch {
+    return 100
+  }
+}
+
+function clampScale(v: number): number {
+  return Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(v / SCALE_STEP) * SCALE_STEP))
+}
 
 function readSortKey(): SortKey {
   try {
@@ -131,15 +148,21 @@ const SORT_HINT: Record<SortKey, string> = {
 
 export default function LibraryWallPage({
   version,
-  onOpen
+  onOpen,
+  scrollMemory
 }: {
   version: number
   onOpen: (id: number) => void
+  /** 离开资源库时由 App 记录的滚动位置；首次数据就绪后恢复 */
+  scrollMemory: MutableRefObject<number>
 }) {
   const [items, setItems] = useState<ItemSummary[] | null>(null)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<'all' | 'library' | 'gift' | 'free' | 'undownloaded' | 'updates' | 'delisted'>('all')
   const [sortKey, setSortKey] = useState<SortKey>(() => readSortKey())
+  const [scale, setScale] = useState<number>(() => readScale())
+  const rootRef = useRef<HTMLDivElement>(null)
+  const restoredRef = useRef(false)
 
   useEffect(() => {
     try {
@@ -148,6 +171,27 @@ export default function LibraryWallPage({
       // 存储不可用时忽略，仅本次会话生效
     }
   }, [sortKey])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SCALE_STORAGE_KEY, String(scale))
+    } catch {
+      // 同上
+    }
+  }, [scale])
+
+  // Ctrl+滚轮缩放卡片；需非 passive 才能阻止 Chromium 的整页缩放
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent): void => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      setScale((s) => clampScale(s + (e.deltaY < 0 ? SCALE_STEP : -SCALE_STEP)))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [items === null])
 
   useEffect(() => {
     const onSearch = (e: Event): void => setQuery((e as CustomEvent<string>).detail)
@@ -194,6 +238,14 @@ export default function LibraryWallPage({
     }
   }, [])
 
+  // 数据首次就绪后恢复离开前的滚动位置（需等列表渲染，否则加载态高度不足会被钳位）
+  useLayoutEffect(() => {
+    if (!items || restoredRef.current) return
+    restoredRef.current = true
+    const scroller = rootRef.current?.closest<HTMLElement>('.main')
+    if (scroller && scrollMemory.current > 0) scroller.scrollTop = scrollMemory.current
+  }, [items, scrollMemory])
+
   const filtered = (() => {
     const matched = (items ?? []).filter((i) => {
       if (filter === 'library') return !i.isFree && !i.isGift
@@ -214,7 +266,7 @@ export default function LibraryWallPage({
   if (!items) return <div className="empty">加载库…</div>
 
   return (
-    <div>
+    <div ref={rootRef}>
       <div className="filter-row">
         <select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}>
           <option value="all">全部商品</option>
@@ -228,6 +280,19 @@ export default function LibraryWallPage({
         <span className="count">
           {filtered.length} / {items.length} 个商品
         </span>
+        <div className="scale-control" title="卡片大小（Ctrl+滚轮也可调整）">
+          <span className="scale-label">大小</span>
+          <input
+            type="range"
+            min={SCALE_MIN}
+            max={SCALE_MAX}
+            step={SCALE_STEP}
+            value={scale}
+            onChange={(e) => setScale(Number(e.target.value))}
+            aria-label="卡片大小"
+          />
+          <span className="scale-value">{scale}%</span>
+        </div>
         <div className="sort-group">
           <span className="sort-hint">
             {SORT_HINT[sortKey]}，顺序：库商品、赠送、免费
@@ -238,7 +303,7 @@ export default function LibraryWallPage({
       {filtered.length === 0 ? (
         <div className="empty">没有匹配的商品{query ? `（搜索：${query}）` : ''}</div>
       ) : (
-        <div className="wall">
+        <div className="wall" style={{ '--wall-scale': scale / 100 } as CSSProperties}>
           {filtered.map((i) => (
             <ItemCard key={i.itemId} item={i} onOpen={onOpen} />
           ))}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CheckProgressEvent, CheckSummary, DeepLinkHostPrompt, ReconcileProgress, Settings } from '../../shared/types'
 import { api } from './api'
 import LibraryWallPage from './pages/LibraryWallPage'
@@ -12,6 +12,11 @@ import DeepLinkHostDialog from './components/DeepLinkHostDialog'
 import BackToTop from './components/BackToTop'
 
 type Tab = 'library' | 'updates' | 'history' | 'settings' | 'log'
+interface Nav {
+  tab: Tab
+  detailId: number | null
+}
+const NAV_LIMIT = 100
 
 interface Toast {
   id: number
@@ -20,15 +25,74 @@ interface Toast {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>(() => {
+  /** 导航栈：标签与详情页统一由栈当前项派生，支持后退 / 前进 */
+  const [nav, setNav] = useState<{ entries: Nav[]; index: number }>(() => {
     const m = /tab=(\w+)/.exec(window.location.hash)
     const t = m?.[1]
-    return t === 'updates' || t === 'history' || t === 'settings' || t === 'log' ? t : 'library'
+    const tab: Tab = t === 'updates' || t === 'history' || t === 'settings' || t === 'log' ? t : 'library'
+    const d = /item=(\d+)/.exec(window.location.hash)
+    return { entries: [{ tab, detailId: d ? Number(d[1]) : null }], index: 0 }
   })
-  const [detailId, setDetailId] = useState<number | null>(() => {
-    const m = /item=(\d+)/.exec(window.location.hash)
-    return m ? Number(m[1]) : null
-  })
+  const tab = nav.entries[nav.index].tab
+  const detailId = nav.entries[nav.index].detailId
+  const mainRef = useRef<HTMLDivElement>(null)
+  /** 离开资源库时记录的滚动位置，返回资源库时恢复 */
+  const wallScrollRef = useRef(0)
+
+  const navigate = useCallback(
+    (target: Nav) => {
+      if (tab === 'library' && detailId === null) wallScrollRef.current = mainRef.current?.scrollTop ?? 0
+      setNav((s) => {
+        const cur = s.entries[s.index]
+        if (cur.tab === target.tab && cur.detailId === target.detailId) return s
+        const entries = [...s.entries.slice(0, s.index + 1), target].slice(-NAV_LIMIT)
+        return { entries, index: entries.length - 1 }
+      })
+    },
+    [tab, detailId]
+  )
+
+  const step = useCallback(
+    (delta: number) => {
+      if (tab === 'library' && detailId === null) wallScrollRef.current = mainRef.current?.scrollTop ?? 0
+      setNav((s) => {
+        const next = s.index + delta
+        return next < 0 || next >= s.entries.length ? s : { ...s, index: next }
+      })
+    },
+    [tab, detailId]
+  )
+
+  useEffect(() => {
+    const onMouse = (e: MouseEvent): void => {
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault()
+        step(e.button === 3 ? -1 : 1)
+      }
+    }
+    const onAux = (e: MouseEvent): void => {
+      if (e.button === 3 || e.button === 4) e.preventDefault()
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault()
+        step(e.key === 'ArrowLeft' ? -1 : 1)
+      }
+    }
+    window.addEventListener('mouseup', onMouse)
+    window.addEventListener('auxclick', onAux)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mouseup', onMouse)
+      window.removeEventListener('auxclick', onAux)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [step])
+
+  // 进入商品详情页时滚动归零，避免沿用列表的滚动位置
+  useLayoutEffect(() => {
+    if (detailId !== null && mainRef.current) mainRef.current.scrollTop = 0
+  }, [detailId])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [authOk, setAuthOk] = useState<boolean | null>(null)
   const [authMessage, setAuthMessage] = useState<string | null>(null)
@@ -182,15 +246,21 @@ export default function App() {
     return () => unsubs.forEach((u) => u())
   }, [pushToast, runAuthCheck])
 
-  const openDetail = useCallback((id: number) => {
-    setDetailId(id)
-  }, [])
+  const openDetail = useCallback(
+    (id: number) => {
+      navigate({ tab: 'library', detailId: id })
+    },
+    [navigate]
+  )
 
   const [historyFocus, setHistoryFocus] = useState<HistoryFocus | null>(null)
-  const openHistoryFor = useCallback((itemId: number) => {
-    setHistoryFocus({ itemId, nonce: Date.now() })
-    setTab('history')
-  }, [])
+  const openHistoryFor = useCallback(
+    (itemId: number) => {
+      setHistoryFocus({ itemId, nonce: Date.now() })
+      navigate({ tab: 'history', detailId: null })
+    },
+    [navigate]
+  )
   // 定位请求只在本次进入历史页时生效，离开后清空，避免下次进入又高亮
   useEffect(() => {
     if (tab !== 'history') setHistoryFocus(null)
@@ -265,8 +335,7 @@ export default function App() {
           placeholder="搜索商品名 / 店铺 / 描述…"
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
-              setDetailId(null)
-              setTab('library')
+              navigate({ tab: 'library', detailId: null })
               window.dispatchEvent(new CustomEvent('booth-search', { detail: (e.target as HTMLInputElement).value }))
             }
           }}
@@ -278,32 +347,32 @@ export default function App() {
       </div>
 
       <div className="nav">
-        <button className={tab === 'library' && detailId === null ? 'active' : ''} onClick={() => { setTab('library'); setDetailId(null) }}>
+        <button className={tab === 'library' && detailId === null ? 'active' : ''} onClick={() => navigate({ tab: 'library', detailId: null })}>
           资源库
         </button>
-        <button className={tab === 'updates' ? 'active' : ''} onClick={() => setTab('updates')}>
+        <button className={tab === 'updates' ? 'active' : ''} onClick={() => navigate({ tab: 'updates', detailId: null })}>
           更新与下载
         </button>
-        <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>
+        <button className={tab === 'history' ? 'active' : ''} onClick={() => navigate({ tab: 'history', detailId: null })}>
           历史
         </button>
-        <button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>
+        <button className={tab === 'settings' ? 'active' : ''} onClick={() => navigate({ tab: 'settings', detailId: null })}>
           设置
         </button>
-        <button className={tab === 'log' ? 'active' : ''} onClick={() => setTab('log')}>
+        <button className={tab === 'log' ? 'active' : ''} onClick={() => navigate({ tab: 'log', detailId: null })}>
           日志
         </button>
       </div>
 
-      <div className="main">
+      <div className="main" ref={mainRef}>
         {tab === 'library' &&
           (detailId === null ? (
-            <LibraryWallPage version={libraryVersion} onOpen={openDetail} />
+            <LibraryWallPage version={libraryVersion} onOpen={openDetail} scrollMemory={wallScrollRef} />
           ) : (
             <ItemDetailPage
               itemId={detailId}
               version={libraryVersion}
-              onBack={() => setDetailId(null)}
+              onBack={() => navigate({ tab: 'library', detailId: null })}
               onChanged={() => setLibraryVersion((v) => v + 1)}
               toast={pushToast}
               onOpenHistory={openHistoryFor}
