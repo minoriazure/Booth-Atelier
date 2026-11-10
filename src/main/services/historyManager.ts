@@ -5,6 +5,7 @@ import type { Paths } from '../util/paths'
 import type { FileHistoryGroup, SnapshotDetail, SnapshotEntry } from '../../shared/types'
 import { localDate, sanitizeFilename, withSuffix } from '../util/filenames'
 import { createLogger } from '../util/log'
+import { metadataContentChanged } from '../booth/itemPageParser'
 
 const log = createLogger('history')
 
@@ -84,14 +85,12 @@ export class HistoryManager {
     galleryUrls: string[]
   }): void {
     const date = input.date ?? localDate()
-    this.paths.ensureItemDataDirs(input.itemId)
+    // 比较连续版本而非仅同日版本；封面变化也必须保留，画廊变化不单独建快照。
+    const last = this.repo.getLatestSnapshot(input.itemId)
+    if (last && !metadataContentChanged(last, input)) return
 
-    // 同日内容相同则跳过
+    this.paths.ensureItemDataDirs(input.itemId)
     const existing = this.repo.listSnapshotDates(input.itemId).filter((s) => s.snapshotDate === date)
-    if (existing.length > 0) {
-      const last = this.repo.getSnapshotAsOf(input.itemId, date)
-      if (last && last.title === input.title && last.descriptionHtml === input.descriptionHtml) return
-    }
 
     this.repo.addSnapshot({
       itemId: input.itemId,

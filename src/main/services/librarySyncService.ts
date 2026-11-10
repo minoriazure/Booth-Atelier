@@ -197,26 +197,22 @@ export class LibrarySyncService {
     return { changed }
   }
 
-  /** 写入详情字段（简介/标题/封面变化时备份旧版本并写新快照）+ 登记图片与视频；返回是否有快照级变化 */
+  /** 写入详情字段与新版本快照 + 登记图片与视频；返回是否有快照级变化 */
   private applyDetail(itemId: number, detail: ItemDetail): boolean {
     const hash = metadataHashOf(detail)
     const prev = this.repo.getMetadataHash(itemId)
     const old = this.repo.getItemDetail(itemId)
     // 从未快照过（prev 为空）视为变化；否则仅简介/标题/封面变化才算，画廊增删不计
     const changed = prev == null || (!!old && metadataContentChanged(old, detail))
-    if (changed) {
-      // 变化前先备份旧版本（若从未快照过，把当前库里存的旧描述作为首个快照）
-      if (prev != null) {
-        if (old && old.descriptionHtml) {
-          this.history.writeMetadataSnapshot({
-            itemId,
-            title: old.title,
-            descriptionHtml: old.descriptionHtml,
-            ogImageUrl: old.ogImageUrl,
-            galleryUrls: old.galleryUrls
-          })
-        }
-      }
+    // 仅兼容已有详情但缺少历史的旧数据；正常更新的旧版本已在历史中，不再次写入。
+    if (changed && prev != null && old?.descriptionHtml && !this.repo.getLatestSnapshot(itemId)) {
+      this.history.writeMetadataSnapshot({
+        itemId,
+        title: old.title,
+        descriptionHtml: old.descriptionHtml,
+        ogImageUrl: old.ogImageUrl,
+        galleryUrls: old.galleryUrls
+      })
     }
     this.repo.updateDetail({
       itemId,

@@ -72,8 +72,10 @@ export class LibraryRepo {
         [input.itemId, input.title, input.thumbnailUrl, input.isGift ? 1 : 0, isFree, `https://booth.pm/zh-cn/items/${input.itemId}`]
       )
     } else {
+      // 列表标题可能带购买规格（如“通常版”）；已有详情时以商店页标题为准。
       this.db.run(
-        `UPDATE items SET title = ?, thumbnail_url = ?, is_gift = ?, is_free = ?, last_list_at = datetime('now'), status = 'active', absent_count = 0 WHERE item_id = ?`,
+        `UPDATE items SET title = CASE WHEN metadata_hash IS NULL THEN ? ELSE title END,
+         thumbnail_url = ?, is_gift = ?, is_free = ?, last_list_at = datetime('now'), status = 'active', absent_count = 0 WHERE item_id = ?`,
         [input.title, input.thumbnailUrl, input.isGift ? 1 : 0, isFree, input.itemId]
       )
     }
@@ -398,6 +400,15 @@ export class LibraryRepo {
     return this.db.all<SnapshotEntry>(
       `SELECT id, snapshot_date AS snapshotDate, captured_at AS capturedAt, title
        FROM metadata_snapshots WHERE item_id = ? ORDER BY id DESC`,
+      [itemId]
+    )
+  }
+
+  /** 最新写入的说明版本；不按日期限制，避免跨天重复备份同一版本。 */
+  getLatestSnapshot(itemId: number): { title: string; descriptionHtml: string; ogImageUrl: string | null } | undefined {
+    return this.db.get(
+      `SELECT title, description_html AS descriptionHtml, og_image_url AS ogImageUrl
+       FROM metadata_snapshots WHERE item_id = ? ORDER BY id DESC LIMIT 1`,
       [itemId]
     )
   }
