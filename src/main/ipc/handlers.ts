@@ -352,6 +352,22 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   handle('downloads:records', (limit?: unknown) => ctx.repo.listDownloadRecords(typeof limit === 'number' ? limit : 100))
 
   // ── history ──
+  const historySelection = (kind: unknown, targets: unknown) => {
+    const parsedKind = z.enum(['files', 'desc']).parse(kind)
+    const key = parsedKind === 'files'
+      ? z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+      : z.string().regex(/^[1-9]\d*$/).refine((s) => Number.isSafeInteger(Number(s)))
+    const parsed = z.array(z.object({ itemId: id, key })).min(1).max(100000).parse(targets)
+    return { kind: parsedKind, targets: parsed }
+  }
+  handle('history:previewDelete', (kind: unknown, targets: unknown) => {
+    const selection = historySelection(kind, targets)
+    return ctx.history.previewDelete(selection.kind, selection.targets)
+  })
+  handle('history:delete', (kind: unknown, targets: unknown) => {
+    const selection = historySelection(kind, targets)
+    return ctx.history.deleteHistory(selection.kind, selection.targets)
+  })
   handle('history:listFileGroups', (itemId: unknown) => ctx.history.listFileGroups(id.parse(itemId)))
   handle('history:listFilesAtArchive', (itemId: unknown, archivedAt: unknown) =>
     ctx.history.listFilesAtArchive(id.parse(itemId), q.parse(archivedAt))

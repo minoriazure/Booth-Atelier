@@ -130,6 +130,12 @@ export class Db {
       this.markDirty()
       log.info('migrations applied: 011_tags')
     }
+    if (Number(version) < 12) {
+      this.db.run('ALTER TABLE metadata_snapshots ADD COLUMN snapshot_file TEXT')
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (12, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 012_snapshot_file')
+    }
   }
 
   exec(sql: string): void {
@@ -232,7 +238,7 @@ export class Db {
 
   private dirtySince: number | null = null
 
-  flush(): void {
+  flush(throwOnError = false): void {
     if (!this.dirty || !this.db) return
     try {
       const data = this.db.export()
@@ -246,6 +252,7 @@ export class Db {
       this.lastFlushAt = Date.now()
     } catch (e) {
       log.error('db flush failed:', e)
+      if (throwOnError) throw e
     }
   }
 

@@ -388,12 +388,15 @@ export class LibraryRepo {
     descriptionHtml: string
     ogImageUrl: string | null
     galleryUrls: string[]
-  }): void {
-    this.db.run(
-      `INSERT INTO metadata_snapshots (item_id, snapshot_date, title, description_html, og_image_url, gallery_json)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [s.itemId, s.date, s.title, s.descriptionHtml, s.ogImageUrl, JSON.stringify(s.galleryUrls)]
-    )
+  }): number {
+    return this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO metadata_snapshots (item_id, snapshot_date, title, description_html, og_image_url, gallery_json)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [s.itemId, s.date, s.title, s.descriptionHtml, s.ogImageUrl, JSON.stringify(s.galleryUrls)]
+      )
+      return this.db.get<{ id: number }>('SELECT last_insert_rowid() AS id')!.id
+    })
   }
 
   listSnapshotDates(itemId: number): SnapshotEntry[] {
@@ -413,13 +416,26 @@ export class LibraryRepo {
     )
   }
 
-  getSnapshotById(id: number): (SnapshotEntry & { descriptionHtml: string; ogImageUrl: string | null; galleryJson: string; itemId: number }) | undefined {
+  getSnapshotById(id: number): (SnapshotEntry & { descriptionHtml: string; ogImageUrl: string | null; galleryJson: string; itemId: number; snapshotFile: string | null }) | undefined {
     return this.db.get(
       `SELECT id, item_id AS itemId, snapshot_date AS snapshotDate, captured_at AS capturedAt, title,
-              description_html AS descriptionHtml, og_image_url AS ogImageUrl, gallery_json AS galleryJson
+              description_html AS descriptionHtml, og_image_url AS ogImageUrl, gallery_json AS galleryJson, snapshot_file AS snapshotFile
        FROM metadata_snapshots WHERE id = ?`,
       [id]
     )
+  }
+
+  listSnapshotStorage(itemId: number): Array<{ id: number; snapshotDate: string; title: string; descriptionHtml: string; snapshotFile: string | null }> {
+    return this.db.all(`SELECT id, snapshot_date AS snapshotDate, title, description_html AS descriptionHtml,
+      snapshot_file AS snapshotFile FROM metadata_snapshots WHERE item_id = ? ORDER BY id`, [itemId])
+  }
+
+  setSnapshotFile(id: number, filename: string): void {
+    this.db.run('UPDATE metadata_snapshots SET snapshot_file = ? WHERE id = ?', [filename, id])
+  }
+
+  flushHistory(): void {
+    this.db.flush(true)
   }
 
   /** 取 ≤ date 的最新快照 */
@@ -449,7 +465,7 @@ export class LibraryRepo {
 
   listFileHistoryDates(itemId: number): FileHistoryEntry[] {
     return this.db.all<FileHistoryEntry>(
-      `SELECT archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
+      `SELECT id, archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
        FROM file_history WHERE item_id = ? ORDER BY archived_at DESC, id DESC`,
       [itemId]
     ).map((r) => this.fileHistoryOut(itemId, r))
@@ -470,10 +486,18 @@ export class LibraryRepo {
 
   listFilesAtArchive(itemId: number, archivedAt: string): FileHistoryEntry[] {
     return this.db.all<FileHistoryEntry>(
-      `SELECT archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
+      `SELECT id, archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
        FROM file_history WHERE item_id = ? AND archived_at = ? ORDER BY filename`,
       [itemId, archivedAt]
     ).map((r) => this.fileHistoryOut(itemId, r))
+  }
+
+  deleteFileHistoryRecord(id: number): void {
+    this.db.run('DELETE FROM file_history WHERE id = ?', [id])
+  }
+
+  deleteSnapshot(id: number): void {
+    this.db.run('DELETE FROM metadata_snapshots WHERE id = ?', [id])
   }
 
   addDownloadRecord(r: {

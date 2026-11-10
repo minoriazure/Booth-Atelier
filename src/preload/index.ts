@@ -12,6 +12,9 @@ import type {
   DownloadSource,
   FileListRow,
   DownloadStats,
+  HistoryDeleteTarget,
+  HistoryDeleteResult,
+  HistoryDeletePreview,
   FileHistoryEntry,
   FileHistoryGroup,
   SnapshotEntry,
@@ -100,6 +103,8 @@ export interface BoothAPI {
     records(limit?: number): Promise<Array<Record<string, unknown>>>
   }
   history: {
+    previewDelete(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): Promise<HistoryDeletePreview>
+    delete(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): Promise<HistoryDeleteResult>
     listFileGroups(itemId: number): Promise<FileHistoryGroup[]>
     listFilesAtArchive(itemId: number, archivedAt: string): Promise<FileHistoryEntry[]>
     listDescriptionEntries(itemId: number): Promise<SnapshotEntry[]>
@@ -225,6 +230,8 @@ const api: BoothAPI = {
     records: (limit) => ipcRenderer.invoke('downloads:records', limit)
   },
   history: {
+    previewDelete: (kind, targets) => ipcRenderer.invoke('history:previewDelete', kind, targets),
+    delete: (kind, targets) => ipcRenderer.invoke('history:delete', kind, targets),
     listFileGroups: (id) => ipcRenderer.invoke('history:listFileGroups', id),
     listFilesAtArchive: (id, archivedAt) => ipcRenderer.invoke('history:listFilesAtArchive', id, archivedAt),
     listDescriptionEntries: (id) => ipcRenderer.invoke('history:listDescriptionEntries', id),

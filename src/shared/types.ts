@@ -280,6 +280,7 @@ export interface ItemImage {
 }
 
 export interface FileHistoryEntry {
+  id: number
   archivedDate: string
   /** 归档时间 UTC，格式 YYYY-MM-DD HH:MM:SS（SQLite datetime('now')） */
   archivedAt: string
@@ -379,4 +380,27 @@ export interface DownloadStats {
   paused: boolean
   /** 用户手动全局暂停 */
   userPaused: boolean
+}
+
+/** 删除目标来自历史列表，不接受渲染进程提供磁盘路径。 */
+export interface HistoryDeleteTarget {
+  itemId: number
+  key: string
+}
+
+export interface HistoryDeletePreview {
+  fileCount: number
+  totalBytes: number
+  missingFiles: number
+  errors: string[]
+}
+
+export interface HistoryDeleteResult {
+  /** 完整删除的时间组 / 说明版本数 */
+  deleted: number
+  deletedRecords: number
+  deletedFiles: number
+  releasedBytes: number
+  failedTargets: HistoryDeleteTarget[]
+  errors: string[]
 }

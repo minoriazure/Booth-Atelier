@@ -379,7 +379,7 @@ export default function App() {
             />
           ))}
         {tab === 'updates' && <UpdatesPage version={libraryVersion} toast={pushToast} onRunCheck={doCheckGlobal} />}
-        {tab === 'history' && <HistoryPage version={libraryVersion} onOpen={openDetail} focus={historyFocus} />}
+        {tab === 'history' && <HistoryPage version={libraryVersion} onOpen={openDetail} focus={historyFocus} toast={pushToast} />}
         {tab === 'settings' && (
           <SettingsPage
             settings={settings}

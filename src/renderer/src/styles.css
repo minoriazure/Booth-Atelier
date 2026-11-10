@@ -1149,7 +1149,7 @@ input.invalid {
 .tag-option:hover {
   background: var(--btn-hover);
 }
-.tag-option input[type='checkbox'] {
+:is(.tag-option, .history-page) input[type='checkbox'] {
   appearance: none;
   flex: 0 0 15px;
   width: 15px;
@@ -1163,25 +1163,137 @@ input.invalid {
   color: var(--accent);
   cursor: pointer;
 }
-.tag-option input[type='checkbox']:checked {
+:is(.tag-option, .history-page) input[type='checkbox']:checked {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg2));
 }
-.tag-option input[type='checkbox']:checked::before {
+:is(.tag-option, .history-page) input[type='checkbox']:checked::before {
   content: '';
   width: 10px;
   height: 8px;
   background: currentColor;
   clip-path: polygon(0 45%, 20% 25%, 40% 50%, 80% 0, 100% 20%, 40% 100%);
 }
-.tag-option input[type='checkbox']:focus-visible {
+:is(.tag-option, .history-page) input[type='checkbox']:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.tag-option input[type='checkbox']:disabled {
+:is(.tag-option, .history-page) input[type='checkbox']:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* 历史选择控件沿用主题背景、边框和用户选择的强调色。 */
+.history-page {
+  color-scheme: dark;
+}
+[data-theme='light'] .history-page {
+  color-scheme: light;
+}
+.history-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.history-time-check {
+  display: flex;
+  padding: 6px 8px;
+  border-radius: 5px;
+}
+.history-time-check:hover {
+  background: var(--btn-hover);
+}
+.history-time-check:has(:checked) {
+  background: var(--accent-soft);
+}
+.history-check-label:has(:disabled) {
+  cursor: not-allowed;
+}
+.history-page input[type='checkbox'] {
+  vertical-align: middle;
+  display: inline-grid;
+  transition: border-color 0.15s, background 0.15s;
+}
+.history-page input[type='checkbox']:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.history-page input[type='checkbox']:indeterminate {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg2));
+}
+.history-page input[type='checkbox']:indeterminate::before {
+  content: '';
+  width: 8px;
+  height: 2px;
+  background: currentColor;
+  clip-path: none;
+  border-radius: 1px;
+}
+/* Chromium 可定制 select：保留原生键盘交互，同时让弹出列表遵循应用主题。 */
+.history-time-select,
+.history-time-select::picker(select) {
+  appearance: base-select;
+}
+.history-time-select {
+  width: 100%;
+  padding: 7px 10px;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.history-time-select:hover:not(:disabled) {
+  background: var(--btn-hover);
+  border-color: var(--btn-hover-border);
+}
+.history-time-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.history-time-select:open {
+  border-color: var(--accent);
+}
+.history-time-select::picker-icon {
+  color: var(--text-dim);
+  transition: rotate 0.15s;
+}
+.history-time-select:open::picker-icon {
+  rotate: 180deg;
+}
+.history-time-select::picker(select) {
+  color: var(--text);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+  margin-block: 5px;
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 20%);
+}
+.history-time-select option {
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  gap: 8px;
+}
+.history-time-select option:hover,
+.history-time-select option:focus-visible {
+  background: var(--btn-hover);
+  outline: none;
+}
+.history-time-select option:checked {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.history-time-select option::checkmark {
+  color: var(--accent);
+}
+.history-time-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .tag-name {
   overflow: hidden;
   text-overflow: ellipsis;
