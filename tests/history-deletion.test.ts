@@ -36,6 +36,52 @@ function archive(itemId: number, date: string, filename = 'asset.zip') {
   return { path, target: { itemId, key: `${date} 12:00:00` } }
 }
 
+it('replays an interrupted durable deletion and clears its marker', () => {
+  const a = archive(1, '2026-11-01')
+  repo.setSetting('pendingHistoryDeletion', { kind: 'files', targets: [a.target], dataRoot: paths.dataRootPath, downloadRoot: paths.rootPath })
+  db.flush(true)
+  rmSync(a.path) // interruption after unlink, before deleting the DB row
+  history.recoverDeletion()
+  expect(repo.listFileHistoryGroups(1)).toEqual([])
+  expect(repo.getSetting('pendingHistoryDeletion', 'missing')).toBeNull()
+})
+
+it('does not replay a deletion against a different storage root', () => {
+  const a = archive(1, '2026-11-01')
+  repo.setSetting('pendingHistoryDeletion', { kind: 'files', targets: [a.target], dataRoot: paths.dataRootPath, downloadRoot: 'different' })
+  history.recoverDeletion()
+  expect(existsSync(a.path)).toBe(true)
+})
+it('reopens and recovers when DB persistence fails after unlink', async () => {
+  const a = archive(1, '2026-11-01')
+  const original = db.flush.bind(db)
+  let forced = 0
+  const spy = vi.spyOn(db, 'flush').mockImplementation((force) => {
+    if (force && ++forced === 2) throw new Error('disk full after unlink')
+    original(force)
+  })
+  expect(() => history.deleteHistory('files', [a.target])).toThrow('disk full')
+  expect(existsSync(a.path)).toBe(false)
+  spy.mockRestore()
+  const reopened = new Db(join(dir, 'test.db'), resolve('node_modules/sql.js/dist/sql-wasm.wasm'))
+  await reopened.open()
+  try {
+    const restoredRepo = new LibraryRepo(reopened, paths)
+    expect(restoredRepo.listFileHistoryGroups(1)).toHaveLength(1)
+    new HistoryManager(restoredRepo, paths).recoverDeletion()
+    expect(restoredRepo.listFileHistoryGroups(1)).toEqual([])
+  } finally { reopened.close() }
+})
+
+it('stops only unexecuted batch targets and reports progress', async () => {
+  const a = archive(1, '2026-11-01'), b = archive(2, '2026-11-02')
+  history.onDeleteProgress = () => history.cancelDeletion()
+  const result = await history.deleteBatch('files', [a.target, b.target])
+  expect(result.deleted).toBe(1)
+  expect(result.failedTargets).toEqual([b.target])
+  expect(existsSync(b.path)).toBe(true)
+})
+
 it('deletes multiple dates across items from disk and DB while preserving unselected and current files', () => {
   const a = archive(1, '2026-11-01')
   const b = archive(1, '2026-11-02')

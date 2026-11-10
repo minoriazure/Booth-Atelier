@@ -1,4 +1,6 @@
-import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'fs'
+import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync, rmSync } from 'fs'
+import { preparePartial, responseOffset, strongEtag } from './downloadResume'
+import { fileSha256 } from '../util/fileHash'
 import { createHash } from 'crypto'
 import { basename, dirname } from 'path'
 import type { DownloadProgressEvent, DownloadDoneEvent, DownloadSource, Fingerprint, FileListRow, DownloadStats } from '../../shared/types'
@@ -385,6 +387,7 @@ export class DownloadManager {
       // skipped 时也保留：markDownloaded 幂等（local_size 对齐磁盘真值）、
       // setQueuedAt 清 downloadNow 写入的排队标记、updateFingerprint 刷新 last_checked_at
       this.repo.markDownloaded(job.downloadableId, result.path, result.size)
+      if (result.sha256) this.repo.run('UPDATE downloadables SET local_sha256 = ? WHERE downloadable_id = ?', [result.sha256, job.downloadableId])
       this.repo.setQueuedAt(job.downloadableId, null)
       if (result.etag) {
         this.repo.updateFingerprint(job.downloadableId, {
@@ -475,7 +478,7 @@ export class DownloadManager {
     signal: AbortSignal,
     label: string,
     decide?: (r: 'started' | 'skipped') => void
-  ): Promise<{ path: string; size: number; filename: string; etag: string | null; lastModified: string | null; archivedPath: string | null; skipped: boolean }> {
+  ): Promise<{ path: string; size: number; filename: string; etag: string | null; lastModified: string | null; archivedPath: string | null; skipped: boolean; sha256?: string }> {
     const d = this.repo.getDownloadable(job.downloadableId)
     if (!d) throw new BoothError('链接不存在', 'invalid')
 
@@ -511,33 +514,23 @@ export class DownloadManager {
     // manual = 用户明确点击"重新下载"，即使指纹一致也强制拉取
     // deeplink = 网页深链自动接收：指纹一致时跳过（不重下不归档），给「已是最新」提示
     const localIsFresh = d.status === 'downloaded' && job.source !== 'manual'
-    if (localIsFresh && existsSync(finalPath) && fp.etag && d.lastEtag === fp.etag && d.lastSize === fp.size) {
+    if (localIsFresh && existsSync(finalPath) && fp.etag && d.lastEtag === fp.etag && d.lastSize === fp.size && statSync(finalPath).size === fp.size) {
       decide?.('skipped')
       return { path: finalPath, size: statSync(finalPath).size, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath: null, skipped: true }
     }
     decide?.('started') // 探测完成、确认要下载（后台继续，不等下载结束）
 
     // Range 断点续传（.part 存在且 < 总大小）
-    let startByte = 0
-    if (existsSync(partPath)) {
-      const partSize = statSync(partPath).size
-      if (total != null && partSize > 0 && partSize < total) {
-        startByte = partSize
-      } else if (total != null && partSize >= total) {
-        // .part 已完整，直接收尾（覆盖前归档旧文件）
-        const archivedPath = this.archiveExisting(job, finalPath, filename, d)
-        renameSync(partPath, finalPath)
-        return { path: finalPath, size: statSync(finalPath).size, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath, skipped: false }
-      } else {
-        unlinkSync(partPath)
-      }
-    }
+    let startByte = preparePartial(partPath, { id: job.downloadableId, etag: fp.etag, size: total })
 
     const headers: Record<string, string> = {
       'user-agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
     }
-    if (startByte > 0) headers['range'] = `bytes=${startByte}-`
+    if (startByte > 0) {
+      headers['range'] = `bytes=${startByte}-`
+      headers['if-range'] = `"${strongEtag(fp.etag)}"`
+    }
     if (fallbackUsed) {
       // 浏览器直下通道需要登录 cookies（S3 签名直链则不需要）
       if (this.jar) headers['cookie'] = await this.jar.cookieHeader(resolved.dlurl)
@@ -568,16 +561,36 @@ export class DownloadManager {
       // 签名过期（罕见，因为我们刚 resolve）→ 报错让上层重试
       throw new BoothError('签名直链 403（可能已过期）', 'invalid', 403)
     }
+    if (res.status === 416) {
+      await res.body?.cancel()
+      rmSync(partPath, { force: true })
+      throw new BoothError('远端文件范围已改变，请重试下载', 'network', 416)
+    }
     if (!res.ok && res.status !== 206) {
       throw new BoothError(`下载失败 HTTP ${res.status}`, res.status >= 500 ? 'server' : 'invalid', res.status)
     }
     if (!res.body) throw new BoothError('响应无内容', 'network')
+
+    try {
+      startByte = responseOffset(res.status, res.headers.get('content-range'), startByte, total)
+      const responseEtag = strongEtag(res.headers.get('etag'))
+      if (responseEtag && strongEtag(fp.etag) && responseEtag !== strongEtag(fp.etag)) {
+        rmSync(partPath, { force: true })
+        throw new Error('远端文件版本已改变，请重试下载')
+      }
+    } catch (e) {
+      await res.body.cancel()
+      throw e
+    }
 
     const ws = createWriteStream(partPath, { flags: startByte > 0 ? 'a' : 'w' })
     const hash = startByte > 0 ? null : createHash('sha256') // 续传时放弃整体 hash（后续可重算）
     let done = startByte
     let lastProgressAt = Date.now()
     const reader = res.body.getReader()
+    let writeError: Error | null = null
+    const onWriteError = (error: Error): void => { writeError = error; void reader.cancel().catch(() => {}) }
+    ws.on('error', onWriteError)
     const STALL_TIMEOUT = 60_000 // 60 秒无数据视为连接停滞
 
     const cleanup = () => {
@@ -638,6 +651,7 @@ export class DownloadManager {
           }
         }
       }
+      if (writeError) throw writeError
       await new Promise<void>((ok, err) => {
         const onErr = (e: Error): void => err(e)
         ws.once('error', onErr)
@@ -652,19 +666,24 @@ export class DownloadManager {
       throw e instanceof BoothError ? e : new BoothError(`流中断: ${e instanceof Error ? e.message : e}`, 'network')
     } finally {
       signal.removeEventListener('abort', cleanup)
+      ws.off('error', onWriteError)
     }
 
     // 校验大小
+    if (signal.aborted) throw new BoothError('已取消', 'invalid')
     const actual = statSync(partPath).size
     if (total != null && actual !== total) {
       throw new BoothError(`大小校验失败: ${actual} != ${total}`, 'network')
     }
+    const sha256 = hash ? hash.digest('hex') : await fileSha256(partPath, signal)
+    if (signal.aborted) throw new BoothError('已取消', 'invalid')
 
     // 覆盖前归档旧文件（历史备份：不删除任何旧数据）
     const archivedPath = this.archiveExisting(job, finalPath, filename, d)
     renameSync(partPath, finalPath)
+    rmSync(partPath + '.json', { force: true })
     this.onProgress?.({ downloadableId: job.downloadableId, itemId: job.itemId, filename, bytesDone: actual, bytesTotal: actual })
-    return { path: finalPath, size: actual, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath, skipped: false }
+    return { path: finalPath, size: actual, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath, skipped: false, sha256 }
   }
 
   /**

@@ -19,6 +19,7 @@
     }
   },
   "include": [
+    "scripts/renderer-smoke.tsx",
     "src/renderer/src/**/*",
     "src/preload/**/*",
     "src/shared/**/*"

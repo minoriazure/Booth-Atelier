@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, copyFileSync } from 'fs'
 import { dirname } from 'path'
 import initSqlJs, { Database } from 'sql.js'
 import { createLogger } from '../util/log'
@@ -9,7 +9,7 @@ const log = createLogger('db')
  * SQLite (sql.js / WASM) 封装。
  * - 零原生编译（机器上无 VS Build Tools）
  * - 落盘策略：脏标记 + 原子写（tmp + rename），写入前防抖
- * - FTS5 全文搜索可用
+ * - 标准构建不含 FTS5，搜索使用 LIKE
  */
 export class Db {
   private db!: Database
@@ -31,12 +31,37 @@ export class Db {
     )
     if (existsSync(this.filePath)) {
       const buf = readFileSync(this.filePath)
-      this.db = new SQL.Database(buf)
+      try {
+        this.db = new SQL.Database(buf)
+        if (this.db.exec('PRAGMA quick_check')[0]?.values[0]?.[0] !== 'ok') throw new Error('integrity check failed')
+      } catch (error) {
+        this.db?.close()
+        throw new Error(`数据库无法读取，原始文件未改动。请先保留原文件，再使用 library.db.backup-1 等升级备份恢复。${String(error)}`)
+      }
     } else {
       this.db = new SQL.Database()
     }
-    this.migrate()
-    this.scheduleSave(true)
+    const version = this.db.exec("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'").length
+      ? Number(this.db.exec('SELECT MAX(version) FROM schema_migrations')[0]?.values[0]?.[0] ?? 0) : 0
+    if (version > 12) { this.db.close(); throw new Error('数据库来自更新版本，请使用对应新版应用') }
+    if (version < 12 && existsSync(this.filePath)) {
+      for (let i = 2; i >= 1; i--) {
+        const source = this.filePath + `.backup-${i}`
+        if (existsSync(source)) copyFileSync(source, this.filePath + `.backup-${i + 1}`)
+      }
+      copyFileSync(this.filePath, this.filePath + '.backup-1')
+    }
+    try {
+      if (version < 12) {
+        this.transaction(() => this.migrate())
+        this.flush(true)
+      }
+    } catch (error) {
+      if (this.saveTimer) clearTimeout(this.saveTimer)
+      this.saveTimer = null
+      this.db.close()
+      throw new Error(`数据库升级失败，原始文件保留；可从 library.db.backup-1 恢复。${String(error)}`)
+    }
     log.info(`db opened: ${this.filePath}`)
   }
 
@@ -207,7 +232,7 @@ export class Db {
   }
 
   /**
-   * 落盘节流：防抖 2s，且两次 export 最小间隔 5s、最长 15s 强制落一次。
+   * 落盘节流：自动 export 最小间隔 5s、最长脏龄 15s；显式 flush/close 可强制落盘。
    * sql.js 每次 export 都在 WASM 堆分配全量副本且不归还——高频 export 会 OOM
    * （图片批量化场景实测：1000+ 次写若每次都 flush 必崩）。
    */
@@ -221,8 +246,8 @@ export class Db {
     if (this.flushPending) return
     const sinceLast = Date.now() - this.lastFlushAt
     const sinceDirtyStart = this.dirtySince ? Date.now() - this.dirtySince : 0
-    // 距上次落盘 <5s 且脏龄 <15s → 防抖 2s 后再试
-    const delay = sinceLast < 5000 && sinceDirtyStart < 15000 ? 2000 : 0
+    // 回调执行时重新核对；显式落盘可能已经更新了 lastFlushAt。
+    const delay = Math.max(0, Math.min(5000 - sinceLast, 15000 - sinceDirtyStart))
     if (delay === 0) {
       this.flush()
       return
@@ -231,7 +256,7 @@ export class Db {
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
       this.flushPending = false
-      this.flush()
+      this.scheduleSave(false)
     }, delay)
     this.saveTimer.unref?.()
   }
@@ -239,13 +264,13 @@ export class Db {
   private dirtySince: number | null = null
 
   flush(throwOnError = false): void {
-    if (!this.dirty || !this.db) return
+    if (!this.dirty || !this.db || this.txDepth > 0) return
     try {
       const data = this.db.export()
       const buf = Buffer.from(data)
       const tmp = this.filePath + '.tmp'
       mkdirSync(dirname(this.filePath), { recursive: true })
-      writeFileSync(tmp, buf)
+      writeFileSync(tmp, buf, { flush: true })
       renameSync(tmp, this.filePath)
       this.dirty = false
       this.dirtySince = null
@@ -253,12 +278,18 @@ export class Db {
     } catch (e) {
       log.error('db flush failed:', e)
       if (throwOnError) throw e
+      if (!this.saveTimer) {
+        this.saveTimer = setTimeout(() => { this.saveTimer = null; this.flush() }, 5000)
+        this.saveTimer.unref?.()
+      }
     }
   }
 
   close(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer)
+    this.saveTimer = null
     this.flush()
+    if (this.saveTimer) clearTimeout(this.saveTimer)
     this.db?.close()
   }
 }

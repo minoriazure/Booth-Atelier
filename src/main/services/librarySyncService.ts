@@ -50,11 +50,13 @@ export class LibrarySyncService {
       /** 商品 → 列表页当前提供的 downloadable 集合（检测消失的旧链接用） */
       const crawledDl = new Map<number, Set<number>>()
       const kinds: Array<'library' | 'gifts'> = ['library', 'gifts']
+      let processed = 0
       for (const kind of kinds) {
         const items = await this.crawler.crawlKind(kind, (_k, page, count) => {
           log.info(`[${kind}] page ${page}: ${count} items`)
         })
         for (const it of items) {
+          if (++processed % 100 === 0) await new Promise<void>((done) => setImmediate(done))
           seen.add(it.itemId)
           if (!knownIds.has(it.itemId)) {
             log.info(`new item (${kind}): item=#${it.itemId}「${it.title.slice(0, 40)}」 links=${it.downloadables.length}`)
@@ -135,6 +137,7 @@ export class LibrarySyncService {
       const detailTargets = this.pickDetailTargets([...Array.from(seen), ...freeIds], staleDays, forceDetail)
       log.info(`detail refresh targets: ${detailTargets.length}`)
       for (let i = 0; i < detailTargets.length; i++) {
+        if (i > 0 && i % 25 === 0) await new Promise<void>((done) => setImmediate(done))
         const itemId = detailTargets[i]
         this.onProgress?.({ phase: 'library', current: i + 1, total: detailTargets.length, label: `商品详情 ${itemId}` })
         try {

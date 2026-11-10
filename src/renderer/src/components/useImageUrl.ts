@@ -19,7 +19,7 @@ export function useImageUrl(remoteUrl: string | null | undefined): string | null
         await new Promise((r) => setTimeout(r, 400 + i * 200))
         if (cancelled) return
       }
-    })()
+    })().catch(() => { if (!cancelled) setUrl(null) })
     return () => {
       cancelled = true
     }

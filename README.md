@@ -4,7 +4,7 @@
 
 **Booth Atelier 是一款独立的 BOOTH 素材库管理工具**
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/github/package-json/v/minoriazure/Booth-Atelier)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2B-0078D4?logo=windows&logoColor=white)
 ![Electron](https://img.shields.io/badge/Electron-45-9FEAF9?logo=electron&logoColor=black)
 ![Node.js](https://img.shields.io/badge/Node.js-24%2B-339933?logo=node.js&logoColor=white)
@@ -25,7 +25,7 @@
 - **精确更新检查**：精确到单个下载链接（官方只能到商品级），可自动检查与自动下载
 - **下载管理**：直接获取卖家上传的原始文件，多任务队列，断点续传，原子落盘
 - **深链接接管**：接管 BOOTH 网页的「DL with BOOTH Library Manager」按钮
-- **历史保留**：旧版本文件与商品说明快照永久保留，可按日期回看
+- **历史保留**：旧版本文件与商品说明快照自动保留，可按时间回看并确认清理
 - **便携版**：免安装，数据全部位于 exe 同级目录，整个文件夹拷走即可使用
 - **代理**：系统代理 / 自定义 / 直连三档，切换即时生效
 

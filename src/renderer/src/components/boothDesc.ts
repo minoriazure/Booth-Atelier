@@ -78,10 +78,37 @@ export function encodeEntities(s: string): string {
 /** 清理内联脚本与事件属性 */
 export function sanitizeDesc(html: string): string {
   if (!html) return ''
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
-    .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
-    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const tags = new Set('p div span section article h1 h2 h3 h4 h5 h6 br hr strong b em i u s del small sub sup blockquote pre code ul ol li dl dt dd a img table thead tbody tfoot tr th td figure figcaption iframe'.split(' '))
+  const discard = new Set('script style svg math base link meta object embed form input button textarea select template'.split(' '))
+  const web = (value: string): boolean => {
+    try { return ['http:', 'https:'].includes(new URL(value).protocol) } catch { return false }
+  }
+  for (const el of Array.from(doc.body.querySelectorAll('*'))) {
+    const tag = el.tagName.toLowerCase()
+    if (!tags.has(tag)) {
+      if (discard.has(tag)) el.remove()
+      else el.replaceWith(...Array.from(el.childNodes))
+      continue
+    }
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase()
+      const value = attr.value
+      const keep = ['class', 'title', 'alt'].includes(name) ||
+        (name === 'data-key' && tag === 'div' && /^[\w:-]+$/.test(value)) ||
+        (['width', 'height', 'colspan', 'rowspan'].includes(name) && /^\d{1,4}$/.test(value)) ||
+        (name === 'href' && tag === 'a' && web(value)) ||
+        (name === 'src' && tag === 'img' && (web(value) || value.startsWith('image-cache://local/'))) ||
+        (name === 'src' && tag === 'iframe' && /^https:\/\/(www\.youtube\.com|www\.youtube-nocookie\.com|embed\.nicovideo\.jp|player\.vimeo\.com)\//.test(value))
+      if (!keep) el.removeAttribute(attr.name)
+    }
+    if (tag === 'a') { el.setAttribute('rel', 'noreferrer noopener'); el.setAttribute('target', '_blank') }
+    if (tag === 'iframe') {
+      if (!el.hasAttribute('src')) { el.remove(); continue }
+      el.setAttribute('sandbox', 'allow-scripts allow-same-origin')
+      el.setAttribute('loading', 'lazy')
+    }
+    if (tag === 'img') el.setAttribute('loading', 'lazy')
+  }
+  return doc.body.innerHTML
 }

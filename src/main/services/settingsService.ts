@@ -70,18 +70,21 @@ export class SettingsService {
   }
 
   set(patch: Partial<Settings>): Settings {
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === undefined) continue
-      if (k === 'downloadRoot') {
-        const abs = resolve(String(v))
-        mkdirSync(abs, { recursive: true })
-        this.repo.setSetting('downloadRoot', this.paths.encodeRootSetting(abs))
-        this.repo.setSetting('downloadRootSource', 'custom')
-        this.paths.setRoot(abs)
-        continue
+    const nextRoot = patch.downloadRoot === undefined ? null : resolve(patch.downloadRoot)
+    if (nextRoot) mkdirSync(nextRoot, { recursive: true })
+    this.repo.transaction(() => {
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) continue
+        if (k === 'downloadRoot') {
+          const abs = resolve(String(v))
+          this.repo.setSetting('downloadRoot', this.paths.encodeRootSetting(abs))
+          this.repo.setSetting('downloadRootSource', 'custom')
+          continue
+        }
+        this.repo.setSetting(k, v)
       }
-      this.repo.setSetting(k, v)
-    }
+    })
+    if (nextRoot) this.paths.setRoot(nextRoot)
     return this.get()
   }
 }

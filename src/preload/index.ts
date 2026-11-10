@@ -44,6 +44,10 @@ export interface VideoProgressEvent {
 }
 
 export interface BoothAPI {
+  storage: {
+    usage(): Promise<{ current: number; history: number; media: number; deleted: number; errors: number }>
+    verify(): Promise<{ checked: number; unverified: number; changed: number; errors: number }>
+  }
   log: {
     listDays(levels: LogLevel[]): Promise<LogDayInfo[]>
     readDay(date: string, offset: number, limit: number, levels: LogLevel[]): Promise<LogPageResult>
@@ -58,6 +62,7 @@ export interface BoothAPI {
     test(): Promise<ProxyTestResult>
   }
   library: {
+    searchPage(query: string, limit: number, after?: { title: string; itemId: number }): Promise<{ items: ItemSummary[]; total: number; next: { title: string; itemId: number } | null }>
     list(q?: string): Promise<ItemSummary[]>
     search(q: string): Promise<ItemSummary[]>
     getItem(id: number): Promise<ItemDetailRow | null>
@@ -71,6 +76,7 @@ export interface BoothAPI {
     deleteItem(id: number): Promise<RemoveItemResult>
   }
   tags: {
+    bulk(items: number[], tags: number[], mode: 'add' | 'remove'): Promise<{ changed: Array<{ itemId: number; tags: TagRef[] }>; unchanged: number; failures: string[] }>
     list(): Promise<TagInfo[]>
     create(name: string): Promise<TagRef>
     rename(id: number, name: string): Promise<TagRef>
@@ -103,6 +109,9 @@ export interface BoothAPI {
     records(limit?: number): Promise<Array<Record<string, unknown>>>
   }
   history: {
+    index(): Promise<{ items: ItemSummary[]; files: Array<{ itemId: number; archivedAt: string; count: number }>; descriptions: Array<SnapshotEntry & { itemId: number }> }>
+    cancelDelete(): Promise<void>
+    onDeleteProgress(cb: (p: { current: number; total: number }) => void): () => void
     previewDelete(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): Promise<HistoryDeletePreview>
     delete(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): Promise<HistoryDeleteResult>
     listFileGroups(itemId: number): Promise<FileHistoryGroup[]>
@@ -179,6 +188,7 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
 }
 
 const api: BoothAPI = {
+  storage: { usage: () => ipcRenderer.invoke('storage:usage'), verify: () => ipcRenderer.invoke('storage:verify') },
   log: {
     listDays: (levels) => ipcRenderer.invoke('log:listDays', levels),
     readDay: (date, offset, limit, levels) => ipcRenderer.invoke('log:readDay', date, offset, limit, levels),
@@ -192,6 +202,7 @@ const api: BoothAPI = {
     test: () => ipcRenderer.invoke('settings:test')
   },
   library: {
+    searchPage: (query, limit, after) => ipcRenderer.invoke('library:searchPage', query, limit, after),
     list: (q) => ipcRenderer.invoke('library:list', q),
     search: (q) => ipcRenderer.invoke('library:search', q),
     getItem: (id) => ipcRenderer.invoke('library:getItem', id),
@@ -204,6 +215,7 @@ const api: BoothAPI = {
     deleteItem: (id) => ipcRenderer.invoke('library:deleteItem', id)
   },
   tags: {
+    bulk: (items, tags, mode) => ipcRenderer.invoke('tags:bulk', items, tags, mode),
     list: () => ipcRenderer.invoke('tags:list'),
     create: (name) => ipcRenderer.invoke('tags:create', name),
     rename: (id, name) => ipcRenderer.invoke('tags:rename', { id, name }),
@@ -230,6 +242,9 @@ const api: BoothAPI = {
     records: (limit) => ipcRenderer.invoke('downloads:records', limit)
   },
   history: {
+    index: () => ipcRenderer.invoke('history:index'),
+    cancelDelete: () => ipcRenderer.invoke('history:cancelDelete'),
+    onDeleteProgress: (cb) => subscribe('event:historyDeleteProgress', cb),
     previewDelete: (kind, targets) => ipcRenderer.invoke('history:previewDelete', kind, targets),
     delete: (kind, targets) => ipcRenderer.invoke('history:delete', kind, targets),
     listFileGroups: (id) => ipcRenderer.invoke('history:listFileGroups', id),

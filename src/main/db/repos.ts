@@ -233,6 +233,18 @@ export class LibraryRepo {
   }
 
   /** 标记入队（持久化，重启后恢复） */
+  listLocalDownloadables(): ReturnType<LibraryRepo['listAllDownloadables']> {
+    const rows = this.db.all<ReturnType<LibraryRepo['listAllDownloadables']>[number]>(
+      `SELECT d.downloadable_id AS downloadableId, d.item_id AS itemId, COALESCE(i.title, '') AS itemTitle,
+        d.filename, d.variation_id AS variationId, d.status, d.last_etag AS lastEtag, d.last_size AS lastSize, d.local_path AS localPath
+       FROM downloadables d LEFT JOIN items i ON i.item_id = d.item_id WHERE d.status != 'missing'`)
+    return rows.map((r) => ({ ...r, localPath: this.downloadLocalOut(r.localPath) }))
+  }
+
+  localChecksum(downloadableId: number): string | null {
+    return this.db.get<{ hash: string | null }>('SELECT local_sha256 AS hash FROM downloadables WHERE downloadable_id = ?', [downloadableId])?.hash ?? null
+  }
+
   setQueuedAt(downloadableId: number, at: string | null): void {
     this.db.run('UPDATE downloadables SET queued_at = ? WHERE downloadable_id = ?', [at, downloadableId])
   }
@@ -576,22 +588,8 @@ export class LibraryRepo {
     ])
   }
 
-  search(q: string): ItemSummary[] {
+  search(q: string, page?: { limit: number; after?: { title: string; itemId: number } }): ItemSummary[] {
     const like = `%${q}%`
-    // items 表为主（列表同步即有标题），items_search 补充描述匹配
-    const hits = this.db.all<{ item_id: number }>(
-      `SELECT item_id FROM items WHERE title LIKE ? OR shop_name LIKE ? LIMIT 200`,
-      [like, like]
-    )
-    const ids = new Set(hits.map((r) => r.item_id))
-    const descHits = this.db.all<{ item_id: number }>(
-      `SELECT item_id FROM items_search WHERE description_text LIKE ? LIMIT 200`,
-      [like]
-    )
-    for (const r of descHits) ids.add(r.item_id)
-    if (ids.size === 0) return []
-    const list = Array.from(ids)
-    const placeholders = list.map(() => '?').join(',')
     return this.attachTags(this.db.all<ItemSummaryRow>(
       `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, COALESCE(NULLIF(i.thumbnail_url, ''), i.og_image_url) AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
@@ -599,10 +597,21 @@ export class LibraryRepo {
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
               SUM(CASE WHEN d.status = 'update_available' THEN 1 ELSE 0 END) AS fileUpdateAvailable
        FROM items i LEFT JOIN downloadables d ON d.item_id = i.item_id
-       WHERE i.item_id IN (${placeholders})
-       GROUP BY i.item_id ORDER BY i.title`,
-      list
+       WHERE (i.title LIKE ? OR i.shop_name LIKE ? OR EXISTS
+         (SELECT 1 FROM items_search s WHERE s.item_id = i.item_id AND s.description_text LIKE ?))
+       ${page?.after ? 'AND (i.title COLLATE NOCASE > ? OR (i.title COLLATE NOCASE = ? AND i.item_id > ?))' : ''}
+       GROUP BY i.item_id ORDER BY i.title COLLATE NOCASE, i.item_id ${page ? 'LIMIT ?' : ''}`,
+      [like, like, like, ...(page?.after ? [page.after.title, page.after.title, page.after.itemId] : []), ...(page ? [page.limit] : [])]
     ).map(boolifyItem))
+  }
+
+  searchPage(q: string, limit: number, after?: { title: string; itemId: number }): { items: ItemSummary[]; total: number; next: { title: string; itemId: number } | null } {
+    const like = `%${q}%`
+    const total = this.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM items i WHERE i.title LIKE ? OR i.shop_name LIKE ? OR EXISTS
+      (SELECT 1 FROM items_search s WHERE s.item_id = i.item_id AND s.description_text LIKE ?)`, [like, like, like])?.n ?? 0
+    const rows = this.search(q, { limit: limit + 1, after })
+    const items = rows.slice(0, limit), last = items[items.length - 1]
+    return { items, total, next: rows.length > limit && last ? { title: last.title, itemId: last.itemId } : null }
   }
 
   /** 为商品列表批量挂载 tags（一次查询，避免逐行查库） */
@@ -624,6 +633,33 @@ export class LibraryRepo {
       map.set(r.item_id, list)
     }
     return map
+  }
+
+  historyIndex(): { items: ItemSummary[]; files: Array<{ itemId: number; archivedAt: string; count: number }>; descriptions: Array<SnapshotEntry & { itemId: number }> } {
+    return {
+      items: this.listSummaries(),
+      files: this.db.all(`SELECT item_id AS itemId, archived_at AS archivedAt, COUNT(*) AS count FROM file_history GROUP BY item_id, archived_at ORDER BY archived_at DESC`),
+      descriptions: this.db.all(`SELECT id, item_id AS itemId, snapshot_date AS snapshotDate, captured_at AS capturedAt, title FROM metadata_snapshots ORDER BY captured_at DESC, id DESC`)
+    }
+  }
+
+  bulkTags(itemIds: number[], tagIds: number[], mode: 'add' | 'remove'): { changed: Array<{ itemId: number; tags: TagRef[] }>; unchanged: number; failures: string[] } {
+    const result = { changed: [] as Array<{ itemId: number; tags: TagRef[] }>, unchanged: 0, failures: [] as string[] }
+    this.db.transaction(() => {
+      for (const itemId of new Set(itemIds)) {
+        try {
+          if (!this.db.get('SELECT item_id FROM items WHERE item_id = ?', [itemId])) throw new Error('商品不存在')
+          const current = this.tagsByItem(itemId).get(itemId) ?? []
+          const ids = current.map((t) => t.id)
+          const next = mode === 'add' ? [...new Set([...ids, ...tagIds])] : ids.filter((id) => !tagIds.includes(id))
+          if (next.length > TAG_LIMITS.perItem) throw new Error(`添加后超过 ${TAG_LIMITS.perItem} 个，已跳过`)
+          if (next.length === ids.length && next.every((id) => ids.includes(id))) { result.unchanged++; continue }
+          const tags = this.setItemTags(itemId, next)
+          result.changed.push({ itemId, tags })
+        } catch (e) { result.failures.push(`#${itemId}：${e instanceof Error ? e.message : String(e)}`) }
+      }
+    })
+    return result
   }
 
   /** 全部 tag 及各自关联的商品数（设置页/管理对话框用） */

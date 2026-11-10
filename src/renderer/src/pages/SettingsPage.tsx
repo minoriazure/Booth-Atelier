@@ -17,6 +17,22 @@ export default function SettingsPage({
   onAuthCheck: () => void
 }) {
   const [saving, setSaving] = useState(false)
+  const [usage, setUsage] = useState<Awaited<ReturnType<typeof api.storage.usage>> | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const verify = async (): Promise<void> => {
+    setVerifying(true)
+    try {
+      const r = await api.storage.verify()
+      toast(r.changed || r.errors ? 'warn' : 'info', `已校验 ${r.checked} 个素材，${r.changed} 个内容不符已退回待下载，${r.unverified} 个旧文件无校验基准，${r.errors} 个无法读取`)
+    } catch (e) { toast('error', String(e)) }
+    finally { setVerifying(false) }
+  }
+  const scanStorage = async (): Promise<void> => {
+    setScanning(true)
+    try { setUsage(await api.storage.usage()) } catch (e) { toast('error', String(e)) }
+    finally { setScanning(false) }
+  }
   const [repairing, setRepairing] = useState(false)
   const [proxyInfo, setProxyInfo] = useState<string | null>(null)
   const [customProxyInput, setCustomProxyInput] = useState(settings.customProxy)
@@ -133,6 +149,11 @@ export default function SettingsPage({
     <div style={{ maxWidth: 780, margin: '0 auto' }}>
       <div className="panel">
         <h3>存储</h3>
+        <div className="setting-row"><div className="label">空间使用</div><div className="value">
+          <button disabled={scanning} onClick={() => void scanStorage()}>{scanning ? '统计中…' : '统计空间'}</button>
+          <button disabled={verifying} onClick={() => void verify()}>{verifying ? '校验中…' : '校验素材内容'}</button>
+          {usage && <span>当前素材 {(usage.current / 1048576).toFixed(1)} MB · 历史 {(usage.history / 1048576).toFixed(1)} MB · 媒体/快照 {(usage.media / 1048576).toFixed(1)} MB · 已删除归档 {(usage.deleted / 1048576).toFixed(1)} MB{usage.errors ? `（${usage.errors} 项无法读取）` : ''}</span>}
+        </div><small>旧版本可在历史页预估空间后删除；媒体缓存供当前说明和历史版本共用。</small></div>
         <div className="setting-row">
           <div className="label">下载根目录</div>
           <div className="value">

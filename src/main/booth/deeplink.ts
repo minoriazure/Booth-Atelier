@@ -76,7 +76,7 @@ export class DeeplinkClient {
 
 function stripQuotes(s: string): string {
   let out = s.trim()
-  if (out.startsWith('W/')) out = out.slice(2)
+  if (out.startsWith('W/')) return out // Weak validators must never become strong resume validators.
   if (out.startsWith('"') && out.endsWith('"')) out = out.slice(1, -1)
   return out
 }

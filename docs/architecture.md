@@ -98,9 +98,18 @@ GET https://booth.pm/downloadables/{id}/deeplink?client=booth-library-manager&va
 ## 数据库
 
 - 位于 `{dataDir}/library.db`，使用 sql.js 的 WASM 实现。
-- 迁移脚本按编号递增（当前到 006），`downloadables.queued_at` 用于持久化队列。
+- 当前 schema 为012：006队列、007免费商品、008/009派生图状态、010远程画廊移除、011标签、012快照文件关联。升级前轮换保留3份 `library.db.backup-N`；迁移在事务内完成，提交后落盘，失败保留原文件。损坏库不会被空库覆盖。
 - sql.js 没有 FTS5，搜索使用 `LIKE`。
-- 批量写入必须攒批并以约 5 秒为间隔节流 flush，否则容易因 WASM 内存不足（OOM）而失败。
+- 自动flush最小间隔5秒、最长脏龄15秒；显式flush/close可强制落盘。批量写走事务，禁止在事务内export。
+
+## 可靠性与访问边界
+
+- `.part.json` 只保存downloadable ID、ETag和大小，不保存签名URL。只有强ETag一致且片段小于总长才续传；If-Range、206区间与总长校验，200从零写，416清片段供重试。下载完成保存本地SHA-256，旧文件在校验完成后才归档。
+- 历史永久删除先持久化操作记录，异步逐文件执行，成功清记录，批次结果落盘后清操作记录。启动仅在存储根未变时幂等恢复；停止操作保留未执行项。
+- 主进程校验IPC sender/mainFrame及应用URL；外部打开只允许http/https，BOOTH深链单独处理。媒体协议限制目录、realpath和类型，支持普通/后缀Range。
+- 商品说明使用DOM标签、属性、URL白名单，与CSP共同约束；iframe仅允许已有视频平台。Cookie导入支持HttpOnly前缀。
+- 历史摘要批量查询，正文按需加载；搜索不再截断200条，并提供稳定游标分页接口；标签批量操作在主进程事务中执行。
+- 图片派生仍为sharp异步单槽队列，生成与落盘模块独立；资源墙跳过离屏绘制，不可见卡片延迟图片解析与补下载。
 
 ## 便携版打包
 

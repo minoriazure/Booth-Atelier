@@ -427,29 +427,14 @@ export function TagBatchDialog({ itemIds, tags, onItemTagsChange, onChanged, onC
     let unchanged = 0
     const failures: string[] = []
     try {
-      for (const itemId of itemIds) {
-        try {
-          // 每次读取最新标签，避免批量操作覆盖已在其他入口做出的修改。
-          const item = await api.library.getItem(itemId)
-          if (!item) throw new Error('商品不存在')
-          const current = item.tags.map((t) => t.id)
-          const next = mode === 'add' ? [...new Set([...current, ...selected])] : current.filter((id) => !selected.includes(id))
-          if (next.length > TAG_LIMITS.perItem) {
-            failures.push(`#${itemId}：添加后超过 8 个，已跳过`)
-            continue
-          }
-          if (next.length === current.length && next.every((id) => current.includes(id))) {
-            unchanged++
-            continue
-          }
-          const saved = await api.tags.setItemTags(itemId, next)
-          onItemTagsChange(itemId, saved)
-          changed++
-        } catch (e) {
-          failures.push(`#${itemId}：${errText(e)}`)
-        }
-      }
+      const result = await api.tags.bulk(itemIds, selected, mode)
+      for (const item of result.changed) onItemTagsChange(item.itemId, item.tags)
+      changed = result.changed.length
+      unchanged = result.unchanged
+      failures.push(...result.failures)
       setResult(`完成：修改 ${changed} 个，无需修改 ${unchanged} 个，跳过或失败 ${failures.length} 个。` + (failures.length ? '\n' + failures.join('\n') : ''))
+    } catch (e) {
+      setResult(`批量操作失败：${errText(e)}`)
     } finally {
       setBusy(false)
       onChanged()

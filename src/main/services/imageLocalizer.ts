@@ -1,7 +1,8 @@
 import { createHash } from 'crypto'
 import { existsSync, mkdirSync, statSync, writeFileSync, renameSync } from 'fs'
 import { join, extname, basename } from 'path'
-import sharp from 'sharp'
+import { generateDerivatives, fileOk } from './imageDerivatives'
+export { THUMB_WIDTH, PREVIEW_LONG_EDGE } from './imageDerivatives'
 import type { ImageProgress, DerivativeProgress, ReconcileProgress, ReconcileResult, CheckAllImagesResult } from '../../shared/types'
 import type { HttpClient } from '../booth/httpClient'
 import type { LibraryRepo, ImageRef, DerivStatus } from '../db/repos'
@@ -704,53 +705,4 @@ export function imageFilename(url: string): string {
     /* default */
   }
   return `${hash}${ext}`
-}
-
-/** 缩略图目标宽度（画廊条、详情页底层占位） */
-export const THUMB_WIDTH = 360
-/** 预览图目标长边（详情页展示、列表卡片、商品描述） */
-export const PREVIEW_LONG_EDGE = 720
-
-/**
- * 用 sharp 从原图生成两层 JPEG（异步，libvips 线程池执行）：
- * - thumb：宽 360（不放大）
- * - preview：长边 720（不放大）
- * 已存在的层跳过；按 EXIF 方向旋转；透明通道压平为白底。
- * 支持 jpg/png/webp/gif/avif（nativeImage 不支持后三者）。
- */
-async function generateDerivatives(src: string, thumbDest: string, previewDest: string): Promise<void> {
-  const thumbMissing = !fileOk(thumbDest)
-  const previewMissing = !fileOk(previewDest)
-  if (!thumbMissing && !previewMissing) return
-  mkdirSync(join(thumbDest, '..'), { recursive: true })
-  mkdirSync(join(previewDest, '..'), { recursive: true })
-
-  const base = sharp(src).rotate().flatten({ background: '#ffffff' })
-  if (thumbMissing) {
-    const buf = await base
-      .clone()
-      .resize({ width: THUMB_WIDTH, withoutEnlargement: true })
-      .jpeg({ quality: 82 })
-      .toBuffer()
-    writeAtomic(thumbDest, buf)
-  }
-  if (previewMissing) {
-    const buf = await base
-      .clone()
-      .resize({ width: PREVIEW_LONG_EDGE, height: PREVIEW_LONG_EDGE, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 82 })
-      .toBuffer()
-    writeAtomic(previewDest, buf)
-  }
-}
-
-function fileOk(p: string): boolean {
-  return existsSync(p) && statSync(p).size > 0
-}
-
-
-function writeAtomic(dest: string, data: Buffer): void {
-  const tmp = dest + '.tmp'
-  writeFileSync(tmp, data)
-  renameSync(tmp, dest)
 }

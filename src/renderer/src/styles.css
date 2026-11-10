@@ -280,6 +280,8 @@ select {
   gap: 14px;
 }
 .card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 310px;
   position: relative;
   zoom: var(--wall-scale, 1);
   background: var(--bg2);

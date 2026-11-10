@@ -36,7 +36,7 @@ export class BoothCookieJar {
     this.jar = new CookieJar()
     let count = 0
     for (const raw of text.split(/\r?\n/)) {
-      const line = raw.trim()
+      const line = raw.trim().replace(/^#HttpOnly_/, '')
       if (!line || line.startsWith('#')) continue
       const parts = line.split('\t')
       if (parts.length < 7) continue

@@ -20,6 +20,14 @@ beforeEach(async () => {
 afterEach(() => { db.close(); rmSync(dir, { recursive: true, force: true }) })
 
 describe('tag persistence and validation', () => {
+  it('applies batches from fresh tags, skips limits and reports missing items', () => {
+    const ids = Array.from({ length: 9 }, (_, i) => repo.createTag(`batch-${i}`).id)
+    repo.setItemTags(1, ids.slice(0, 8))
+    expect(repo.bulkTags([1, 999], [ids[8]], 'add')).toMatchObject({ changed: [], unchanged: 0, failures: expect.any(Array) })
+    expect(repo.getItemDetail(1)?.tags).toHaveLength(8)
+    expect(repo.bulkTags([1, 1], [ids[0]], 'remove').changed).toHaveLength(1)
+    expect(repo.bulkTags([1], [ids[8]], 'add').changed).toHaveLength(1)
+  })
   it('enforces the global limit without modifying existing tags', () => {
     for (let i = 0; i < 32; i++) repo.createTag(`tag ${i}`)
     expect(() => repo.createTag('extra')).toThrow('上限')

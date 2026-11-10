@@ -1,5 +1,5 @@
 import { ipcMain, shell, dialog, BrowserWindow } from 'electron'
-import { existsSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { z } from 'zod'
 import type { AppContext } from '../appContext'
 import { isAuthError } from '../booth/errors'
@@ -11,6 +11,10 @@ import { videoThumbPath } from '../services/videoThumb'
 import { isWebUrl } from '../util/externalUrl'
 import type { ProxyTestResult } from '../../shared/types'
 import { LOG_LEVELS } from '../../shared/types'
+import { settingsPatch } from './settingsSchema'
+import { allowedFile } from '../util/pathAccess'
+import { pathToFileURL } from 'url'
+import { join } from 'path'
 
 const log = createLogger('ipc')
 
@@ -50,6 +54,13 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   const handle = <T extends unknown[], R>(name: string, fn: (...args: T) => Promise<R> | R) => {
     ipcMain.handle(name, async (_e, ...args) => {
       try {
+        const w = getWindow()
+        const frame = _e.senderFrame
+        const expected = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href
+        if (!w || _e.sender !== w.webContents || !frame || frame !== w.webContents.mainFrame ||
+            new URL(frame.url).href.split('#')[0] !== new URL(expected).href.split('#')[0]) {
+          throw new Error('不受信任的调用来源')
+        }
         return await fn(...(args as T))
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -66,43 +77,59 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
 
   // ── settings ──
   handle('settings:get', () => ctx.settings.get())
+  handle('storage:usage', () => ctx.storageUsage())
+  handle('storage:verify', () => ctx.verifyLocalFiles())
+  handle('tags:bulk', (items: unknown, tags: unknown, mode: unknown) => ctx.repo.bulkTags(
+    z.array(id).max(100000).parse(items), z.array(id).max(32).parse(tags), z.enum(['add', 'remove']).parse(mode)))
+  handle('history:index', () => ctx.repo.historyIndex())
+  handle('library:searchPage', (query: unknown, limit: unknown, after: unknown) => {
+    const cursor = z.object({ title: z.string(), itemId: id }).optional().parse(after)
+    const result = ctx.repo.searchPage(q.max(500).parse(query), z.number().int().min(1).max(500).parse(limit), cursor)
+    return { ...result, items: result.items.map((r) => ({ ...r, localThumb: r.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolvePreviewLocal(r.thumbnailUrl)) : null })) }
+  })
+  handle('history:cancelDelete', () => ctx.history.cancelDeletion())
+  ctx.history.onDeleteProgress = (p) => send('event:historyDeleteProgress', p)
   handle('settings:set', async (patch: unknown) => {
-    const p = z.record(z.string(), z.unknown()).parse(patch) as Record<string, unknown>
-    if (p.proxyMode !== undefined && !['system', 'custom', 'direct'].includes(String(p.proxyMode))) {
-      throw new Error(`无效的代理模式: ${String(p.proxyMode)}`)
+    const p = settingsPatch.parse(patch)
+    const previous = ctx.settings.get()
+    if (p.downloadRoot !== undefined && (ctx.history.isDeleting || ctx.downloads.stats.active > 0)) {
+      throw new Error('请等待当前下载或历史删除完成后再更改下载目录')
     }
-    if (p.customProxy !== undefined) {
+    if (p.customProxy !== undefined || p.proxyMode !== undefined) {
       const effectiveMode = p.proxyMode ?? ctx.settings.get().proxyMode
-      const v = String(p.customProxy ?? '').trim()
-      p.customProxy = v
+      const v = String(p.customProxy ?? previous.customProxy).trim()
+      if (p.customProxy !== undefined) p.customProxy = v
       if (effectiveMode === 'custom' && v && !normalizeProxyRules(v)) {
         throw new Error('自定义代理地址无效，请输入例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080')
       }
-    }
-    if (p.autoRegisterDeepLink !== undefined && typeof p.autoRegisterDeepLink !== 'boolean') {
-      throw new Error('autoRegisterDeepLink 必须是布尔值')
     }
     // cookiesPath = 覆盖项：非空时文件必须真实存在（启动时同样「存在才覆盖」，保持一致）
     if (p.cookiesPath !== undefined) {
       const v = String(p.cookiesPath ?? '').trim()
       p.cookiesPath = v
-      if (v && !existsSync(v)) throw new Error(`Cookie 文件不存在: ${v}`)
+      if (v && (!existsSync(v) || !statSync(v).isFile())) throw new Error(`Cookie 文件不存在或不是普通文件: ${v}`)
     }
-    if ('logRetentionDays' in p) {
-      const v = Number(p.logRetentionDays)
-      if (!Number.isInteger(v) || v < 7 || v > 180) throw new Error('日志保留天数必须是 7–180 之间的整数')
-      p.logRetentionDays = v
+    if ('proxyMode' in p || 'customProxy' in p) {
+      try {
+        if (!await applyProxySettings(p.proxyMode ?? previous.proxyMode, p.customProxy ?? previous.customProxy)) throw new Error('代理设置未能应用')
+      } catch (e) {
+        await applyProxySettings(previous.proxyMode, previous.customProxy)
+        throw e
+      }
     }
-    const next = ctx.settings.set(p as never)
+    let next
+    try { next = ctx.settings.set(p) } catch (e) {
+      await applyProxySettings(previous.proxyMode, previous.customProxy)
+      throw e
+    }
+    ctx.downloads.setConcurrency(next.downloadConcurrency)
+    ctx.setRequestInterval(next.minRequestIntervalMs)
     log.info(`settings saved: ${Object.keys(p).join(', ') || '(none)'}`)
     if ('logRetentionDays' in p) {
       log.info(`log retention changed to ${next.logRetentionDays} day(s)`)
       void cleanupLogs(next.logRetentionDays)
     }
     // 代理设置变更：立即热应用（无需重启），随后 UI 刷新 proxyInfo 即可看到新值
-    if ('proxyMode' in p || 'customProxy' in p) {
-      await applyProxySettings(next.proxyMode, next.customProxy)
-    }
     // cookies 路径变更：立即热应用（空 = 清除覆盖 → 回默认查找链）
     if ('cookiesPath' in p) {
       ctx.jar.setPath(String(next.cookiesPath || '').trim() || ctx.defaultCookiesPath)
@@ -283,7 +310,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   handle('videos:list', (itemId: unknown) => ctx.repo.listVideosByItem(id.parse(itemId)))
   handle('videos:download', async (key?: unknown) => ctx.videos.download(q.parse(key)))
   handle('videos:ensureThumb', async (key?: unknown) => tryMedia(await ctx.videos.ensureThumb(q.parse(key))))
-  handle('videos:reveal', (p?: unknown) => shell.showItemInFolder(q.parse(p)))
+  handle('videos:reveal', (p?: unknown) => shell.showItemInFolder(allowedFile(q.parse(p), [ctx.paths.dataRootPath])))
   handle('library:openItemPage', (itemId: unknown) => {
     shell.openExternal(`https://booth.pm/zh-cn/items/${id.parse(itemId)}`)
   })
@@ -362,11 +389,11 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   }
   handle('history:previewDelete', (kind: unknown, targets: unknown) => {
     const selection = historySelection(kind, targets)
-    return ctx.history.previewDelete(selection.kind, selection.targets)
+    return ctx.history.previewBatch(selection.kind, selection.targets)
   })
   handle('history:delete', (kind: unknown, targets: unknown) => {
     const selection = historySelection(kind, targets)
-    return ctx.history.deleteHistory(selection.kind, selection.targets)
+    return ctx.history.deleteBatch(selection.kind, selection.targets)
   })
   handle('history:listFileGroups', (itemId: unknown) => ctx.history.listFileGroups(id.parse(itemId)))
   handle('history:listFilesAtArchive', (itemId: unknown, archivedAt: unknown) =>
@@ -378,8 +405,8 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     if (!s) return null
     return { ...s, localImages: localizeSnapshotImages(ctx, s.itemId, s.descriptionHtml) }
   })
-  handle('history:openPath', (p: unknown) => shell.openPath(q.parse(p)))
-  handle('history:revealPath', (p: unknown) => shell.showItemInFolder(q.parse(p)))
+  handle('history:openPath', (p: unknown) => shell.openPath(allowedFile(q.parse(p), [ctx.paths.dataRootPath, ctx.paths.rootPath], true)))
+  handle('history:revealPath', (p: unknown) => shell.showItemInFolder(allowedFile(q.parse(p), [ctx.paths.dataRootPath, ctx.paths.rootPath])))
 
   // ── 系统代理状态（设置页展示；下载实际走 Chromium 栈自动应用） ──
   handle('system:proxyInfo', async () => {

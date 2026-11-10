@@ -20,12 +20,16 @@ import { StartupService } from './services/startupService'
 import { ImageLocalizer } from './services/imageLocalizer'
 import { VideoService } from './services/videoService'
 import { ItemRemovalService } from './services/itemRemovalService'
-import { reconcileLocalFiles, type ReconcileResult } from './services/localFileReconciler'
+import { reconcileLocalFiles, verifyLocalFiles, type ReconcileResult } from './services/localFileReconciler'
 import { createLogger } from './util/log'
+import { storageUsage } from './services/storageUsage'
 
 const log = createLogger('app')
 
 export interface AppContext {
+  verifyLocalFiles(): ReturnType<typeof verifyLocalFiles>
+  setRequestInterval(ms: number): void
+  storageUsage(): ReturnType<typeof storageUsage>
   jar: BoothCookieJar
   http: HttpClient
   deeplink: DeeplinkClient
@@ -130,6 +134,7 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   }
 
   const history = new HistoryManager(repo, paths)
+  history.recoverDeletion()
   const imageLocalizer = new ImageLocalizer(http, repo, paths)
   const videos = new VideoService(repo, paths)
   const sync = new LibrarySyncService(crawler, itemPage, repo, history, imageLocalizer)
@@ -155,6 +160,9 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   log.info(`app context ready: data=${paths.dataRootPath} downloads=${paths.rootPath}`)
 
   return {
+    verifyLocalFiles: () => verifyLocalFiles(repo, paths),
+    setRequestInterval: (ms) => limiter.setMinInterval(ms),
+    storageUsage: () => storageUsage(paths.dataRootPath, paths.rootPath, opts.deletedRoot ?? join(dirname(process.execPath), 'deleted')),
     jar,
     http,
     deeplink,

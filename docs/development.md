@@ -24,6 +24,12 @@ npm install          # 安装依赖（含 Electron 二进制）
 | `npm run dist` | 构建并打包便携版 exe 到 `dist/` |
 | `npm run typecheck` | 类型检查（`tsconfig.node.json` + `tsconfig.web.json`） |
 | `npm test` | 运行测试（Vitest） |
+| `npm run test:electron` | 先build，再运行隔离的Electron组件/应用启动与访问边界回归，网络被禁用 |
+| `npm run benchmark` | 在临时合成库测量100/1000/5000商品的搜索、历史摘要、离线同步、内存和图片派生吞吐 |
+
+正式单元测试只收集根目录 `tests/`；本地交接目录中的测试不属于CI。分支/PR和发布CI均运行typecheck、单元测试、build和Electron回归。Electron测试使用空白虚拟Cookie和隔离profile，不使用用户数据；隐藏窗口的rAF可能超时，因此资源墙scroll probe不视为真实FPS。
+
+发布时 `scripts/release-check.mjs` 核对标签、package和lock版本，`--hash` 核对便携产物名并生成SHA256SUMS.txt；CI将校验值与exe一起上传。构建不会自动签名，安装版仍冻结。
 
 ### 打包说明
 

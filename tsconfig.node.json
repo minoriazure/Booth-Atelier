@@ -17,6 +17,7 @@
       "@preload/*": ["src/preload/*"]
     }
   },
+  "exclude": ["scripts/renderer-smoke.tsx"],
   "include": [
     "src/main/**/*",
     "src/shared/**/*",

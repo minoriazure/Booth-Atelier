@@ -49,6 +49,8 @@ export default function HistoryPage({
   const [preview, setPreview] = useState<{ targets: HistoryDeleteTarget[]; value: HistoryDeletePreview | null; error: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 })
+  useEffect(() => api.history.onDeleteProgress(setDeleteProgress), [])
   const [message, setMessage] = useState('')
   const [highlightId, setHighlightId] = useState<number | null>(null)
   const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
@@ -58,19 +60,11 @@ export default function HistoryPage({
     let cancelled = false
     setLoading(true)
     void (async () => {
-      const list = await api.library.list()
+      const { items: list, files, descriptions } = await api.history.index()
       const fo: Record<number, Option[]> = {}
       const dO: Record<number, Option[]> = {}
-      for (const it of list) {
-        const groups = await api.history.listFileGroups(it.itemId)
-        if (groups.length) {
-          fo[it.itemId] = groups.map((g) => ({ key: g.archivedAt, count: g.count, label: `${formatCapturedAt(g.archivedAt)} · ${g.count} 个文件` }))
-        }
-        const entries = await api.history.listDescriptionEntries(it.itemId)
-        if (entries.length) {
-          dO[it.itemId] = entries.map((s) => ({ key: String(s.id), label: formatCapturedAt(s.capturedAt) }))
-        }
-      }
+      for (const g of files) (fo[g.itemId] ??= []).push({ key: g.archivedAt, count: g.count, label: `${formatCapturedAt(g.archivedAt)} · ${g.count} 个文件` })
+      for (const s of descriptions) (dO[s.itemId] ??= []).push({ key: String(s.id), label: formatCapturedAt(s.capturedAt) })
       if (cancelled) return
       setItems(list)
       setFileOpts(fo)
@@ -139,6 +133,7 @@ export default function HistoryPage({
   const confirmDelete = async (): Promise<void> => {
     if (!pending || busy || loading || preview?.targets !== pending || !preview.value) return
     setBusy(true)
+    setDeleteProgress({ current: 0, total: pending.length })
     try {
       const result = await api.history.delete(kind, pending)
       const summary = `已删除 ${result.deletedRecords} 条记录、${result.deletedFiles} 个文件，释放 ${formatBytes(result.releasedBytes)}`
@@ -305,9 +300,11 @@ export default function HistoryPage({
               </p>}
             </>}
           <p>当前下载文件和商品当前说明不受影响。</p>
-          <ul style={{ maxHeight: 220, overflowY: 'auto' }}>{pending.map((t) => <li key={`${t.itemId}-${t.key}`}>
+          <ul style={{ maxHeight: 220, overflowY: 'auto' }}>{pending.slice(0, 100).map((t) => <li key={`${t.itemId}-${t.key}`}>
             #{t.itemId} {items.find((it) => it.itemId === t.itemId)?.title} · {opts[t.itemId]?.find((o) => o.key === t.key)?.label}
           </li>)}</ul>
+          {pending.length > 100 && <p>仅列出前100项，另有 {pending.length - 100} 项。</p>}
+          {busy && <p role="status">正在删除 {deleteProgress.current} / {deleteProgress.total} <button onClick={() => void api.history.cancelDelete()}>停止后续删除</button></p>}
           <div className="buttons">
             <button autoFocus disabled={busy} onClick={() => setPending(null)}>取消</button>
             <button className="danger" disabled={busy || loading || preview?.targets !== pending || !preview.value} onClick={() => void confirmDelete()}>

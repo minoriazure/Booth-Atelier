@@ -9,6 +9,8 @@ import { createLogger, onLogWritten } from './util/log'
 import { resolveDataDir, resolveDevRoot } from './util/dataDir'
 import { cleanupLogs } from './services/logService'
 import { isWebUrl } from './util/externalUrl'
+import { allowedFile } from './util/pathAccess'
+import { byteRange } from './util/byteRange'
 
 const log = createLogger('main')
 
@@ -45,20 +47,20 @@ function setupImageProtocol(): void {
       }
       if (!existsSync(p)) return Promise.resolve(new Response('not found', { status: 404 }))
 
+      if (!ctx || !MIME_BY_EXT[extname(p).toLowerCase()]) return Promise.resolve(new Response('forbidden', { status: 403 }))
+      p = allowedFile(p, [ctx.paths.dataRootPath, ctx.paths.rootPath])
+
       const stat = statSync(p)
       if (!stat.isFile()) return Promise.resolve(new Response('not a file', { status: 404 }))
       const mime = MIME_BY_EXT[extname(p).toLowerCase()] || 'application/octet-stream'
       const range = request.headers.get('range')
 
       if (range) {
-        const m = /bytes=(\d*)-(\d*)/.exec(range)
-        let start = m && m[1] ? Number(m[1]) : 0
-        let end = m && m[2] ? Number(m[2]) : stat.size - 1
-        if (isNaN(start) || start < 0) start = 0
-        if (isNaN(end) || end >= stat.size) end = stat.size - 1
-        if (start > end) {
+        const parsed = byteRange(range, stat.size)
+        if (!parsed) {
           return Promise.resolve(new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${stat.size}` } }))
         }
+        const { start, end } = parsed
         const stream = createReadStream(p, { start, end })
         return Promise.resolve(
           new Response(stream as unknown as ReadableStream, {
@@ -88,6 +90,7 @@ function setupImageProtocol(): void {
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
+    show: process.env.BOOTH_SMOKE !== '1',
     width: 1440,
     height: 920,
     minWidth: 960,
@@ -110,7 +113,7 @@ function createWindow(): void {
       void deliverProtocolUrl(url)
       return { action: 'deny' }
     }
-    void shell.openExternal(url)
+    if (isWebUrl(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 
@@ -123,9 +126,9 @@ function createWindow(): void {
       void deliverProtocolUrl(url)
       return
     }
-    if (isWebUrl(url) && new URL(url).origin !== devOrigin) {
+    if (!devOrigin || !isWebUrl(url) || new URL(url).origin !== devOrigin) {
       e.preventDefault()
-      void shell.openExternal(url)
+      if (isWebUrl(url)) void shell.openExternal(url)
     }
   })
 

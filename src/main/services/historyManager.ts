@@ -6,16 +6,22 @@ import type { FileHistoryEntry, FileHistoryGroup, SnapshotDetail, SnapshotEntry,
 import { localDate, sanitizeFilename, withSuffix } from '../util/filenames'
 import { createLogger } from '../util/log'
 import { metadataContentChanged } from '../booth/itemPageParser'
+import { removeHistoryEntries, inspectHistoryEntries } from './historyDeletion'
+type LegacyLookups = Map<number, Map<number, string | null | Error>>
 
 const log = createLogger('history')
 
 /**
  * 历史管理（用户需求 #4）：
- * - 文件更新时，旧文件【移动】到 files/history/{YYYY-MM-DD}/（不复制、不删除）
- * - 商品描述/宣传图变化时写 metadata_snapshots + meta/snapshots/{date}.html
- * - 两类历史独立按日期查询（两个下拉菜单互不关联）
+ * - 素材旧文件归档到下载根/{item}/history/{date}/。
+ * - 说明版本保存为 metadata_snapshots + data/items/{item}/snapshots/snapshot-{id}.html。
+ * - 用户确认后可永久删除；持久化操作记录用于异常退出恢复。
  */
 export class HistoryManager {
+  private batchRunning = false
+  private cancelled = false
+  get isDeleting(): boolean { return this.batchRunning }
+  onDeleteProgress?: (progress: { current: number; total: number }) => void
   constructor(
     private repo: LibraryRepo,
     private paths: Paths
@@ -121,7 +127,13 @@ export class HistoryManager {
   }
 
   /** 旧快照依据原始注释和完整正文认领文件，避免删记录后按日期序号误删其它版本。 */
-  private resolveSnapshotFile(itemId: number, id: number): string | null {
+  private resolveSnapshotFile(itemId: number, id: number, lookups?: LegacyLookups): string | null {
+    const cached = lookups?.get(itemId)
+    if (cached?.has(id)) {
+      const value = cached.get(id)!
+      if (value instanceof Error) throw value
+      return value
+    }
     const snapshot = this.repo.getSnapshotById(id)
     if (!snapshot || snapshot.itemId !== itemId) return null
     const dir = this.paths.snapshotsDir(itemId)
@@ -155,16 +167,20 @@ export class HistoryManager {
       matching.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       group.forEach((r, index) => {
         this.repo.setSnapshotFile(r.id, matching[index])
+        r.snapshotFile = matching[index]
         claimed.add(matching[index])
       })
     }
-    const resolved = this.repo.getSnapshotById(id)!
-    if (resolved.snapshotFile !== null) return join(dir, resolved.snapshotFile)
-    if (files.some((f) => f.startsWith(snapshot.snapshotDate) && !claimed.has(f))) {
-      throw new Error('旧说明快照文件归属不明确，无法安全同步删除')
+    const resolved = new Map<number, string | null | Error>()
+    for (const record of records) {
+      resolved.set(record.id, record.snapshotFile ? join(dir, record.snapshotFile) :
+        files.some((f) => f.startsWith(record.snapshotDate) && !claimed.has(f))
+          ? new Error('旧说明快照文件归属不明确，无法安全同步删除') : null)
     }
-    // 历史文件已缺失，仍允许清理数据库记录。
-    return null
+    lookups?.set(itemId, resolved)
+    const value = resolved.get(id) ?? null
+    if (value instanceof Error) throw value
+    return value
   }
 
   private assertHistoryPath(root: string, path: string): void {
@@ -177,13 +193,13 @@ export class HistoryManager {
     }
   }
 
-  private deletionEntries(kind: 'files' | 'desc', target: HistoryDeleteTarget): Array<{ id: number; path: string | null; root: string }> {
+  private deletionEntries(kind: 'files' | 'desc', target: HistoryDeleteTarget, lookups?: LegacyLookups): Array<{ id: number; path: string | null; root: string }> {
     if (kind === 'files') return this.repo.listFilesAtArchive(target.itemId, target.key).map((f) => ({
       id: f.id, path: f.archivedPath, root: join(this.paths.itemDir(target.itemId), 'history')
     }))
     const snapshot = this.repo.getSnapshotById(Number(target.key))
     if (!snapshot || snapshot.itemId !== target.itemId) return []
-    return [{ id: snapshot.id, path: this.resolveSnapshotFile(target.itemId, snapshot.id), root: this.paths.snapshotsDir(target.itemId) }]
+    return [{ id: snapshot.id, path: this.resolveSnapshotFile(target.itemId, snapshot.id, lookups), root: this.paths.snapshotsDir(target.itemId) }]
   }
 
   /** 以磁盘实际大小预估，仅统计所选历史文件，不统计共用的图片缓存或当前文件。 */
@@ -224,7 +240,8 @@ export class HistoryManager {
   }
 
   /** 每个文件独立同步磁盘与记录；只保留失败记录，成功部分不因同组其它文件失败而回退。 */
-  deleteHistory(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): HistoryDeleteResult {
+  deleteHistory(kind: 'files' | 'desc', targets: HistoryDeleteTarget[], persist = true): HistoryDeleteResult {
+    if (persist) this.writeDeletionJournal(kind, targets)
     const result: HistoryDeleteResult = { deleted: 0, deletedRecords: 0, deletedFiles: 0, releasedBytes: 0, failedTargets: [], errors: [] }
     const seen = new Set<string>()
     for (const target of targets) {
@@ -265,7 +282,89 @@ export class HistoryManager {
       if (result.errors.length > startErrors) result.failedTargets.push(target)
     }
     // 一批完成后统一持久化，避免成功提示先于数据库落盘。
+    if (persist) this.finishDeletionJournal()
+    return result
+  }
+
+  private writeDeletionJournal(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): void {
+    this.repo.setSetting('pendingHistoryDeletion', { kind, targets, dataRoot: this.paths.dataRootPath, downloadRoot: this.paths.rootPath })
     this.repo.flushHistory()
+  }
+
+  private finishDeletionJournal(): void {
+    // Persist the resulting rows before clearing the replay marker.
+    this.repo.flushHistory()
+    this.repo.setSetting('pendingHistoryDeletion', null)
+    this.repo.flushHistory()
+  }
+
+  recoverDeletion(): void {
+    const pending = this.repo.getSetting<{ kind: 'files' | 'desc'; targets: HistoryDeleteTarget[]; dataRoot: string; downloadRoot: string } | null>('pendingHistoryDeletion', null)
+    if (!pending) return
+    if (!['files', 'desc'].includes(pending.kind) || !Array.isArray(pending.targets) ||
+        pending.targets.some((t) => !Number.isSafeInteger(t.itemId) || t.itemId <= 0 || typeof t.key !== 'string')) {
+      log.error('invalid history deletion journal; retained for inspection')
+      return
+    }
+    if (pending.dataRoot !== this.paths.dataRootPath || pending.downloadRoot !== this.paths.rootPath) {
+      log.warn('unfinished history deletion retained: storage roots changed; retry explicitly in history page')
+      return
+    }
+    log.warn('recovering interrupted history deletion')
+    this.deleteHistory(pending.kind, pending.targets)
+  }
+
+  cancelDeletion(): void { this.cancelled = true }
+
+  async deleteBatch(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): Promise<HistoryDeleteResult> {
+    if (this.batchRunning) throw new Error('已有历史删除任务正在执行')
+    this.batchRunning = true
+    this.cancelled = false
+    const lookups: LegacyLookups = new Map()
+    let lastProgress = 0
+    const unique = [...new Map(targets.map((t) => [`${t.itemId}:${t.key}`, t])).values()]
+    const result: HistoryDeleteResult = { deleted: 0, deletedRecords: 0, deletedFiles: 0, releasedBytes: 0, failedTargets: [], errors: [] }
+    try {
+      this.writeDeletionJournal(kind, unique)
+      for (let i = 0; i < unique.length; i++) {
+        if (this.cancelled) { result.failedTargets.push(...unique.slice(i)); result.errors.push('已停止，未执行项已保留'); break }
+        const target = unique[i]
+        try {
+          const entries = this.deletionEntries(kind, target, lookups)
+          const part = await removeHistoryEntries(entries, (id) => {
+            if (kind === 'files') this.repo.deleteFileHistoryRecord(id)
+            else this.repo.deleteSnapshot(id)
+          }, () => this.cancelled)
+          for (const key of ['deletedRecords', 'deletedFiles', 'releasedBytes'] as const) result[key] += part[key]
+          if (part.errors.length) {
+            result.failedTargets.push(target)
+            result.errors.push(...part.errors.map((e) => `#${target.itemId} ${target.key}：${e}`))
+          } else if (entries.length) result.deleted++
+        } catch (e) {
+          result.failedTargets.push(target)
+          result.errors.push(`#${target.itemId} ${target.key}：${e instanceof Error ? e.message : String(e)}`)
+        }
+        if (unique.length < 100 || i === unique.length - 1 || Date.now() - lastProgress > 100) {
+          this.onDeleteProgress?.({ current: i + 1, total: unique.length }); lastProgress = Date.now()
+        }
+        if (i % 20 === 0) await new Promise<void>((done) => setImmediate(done))
+      }
+      this.finishDeletionJournal()
+      return result
+    } finally { this.batchRunning = false }
+  }
+
+  async previewBatch(kind: 'files' | 'desc', targets: HistoryDeleteTarget[]): Promise<HistoryDeletePreview> {
+    const result: HistoryDeletePreview = { fileCount: 0, totalBytes: 0, missingFiles: 0, errors: [] }
+    const unique = [...new Map(targets.map((t) => [`${t.itemId}:${t.key}`, t])).values()]
+    const lookups: LegacyLookups = new Map(), seenFiles = new Set<string>()
+    for (const target of unique) {
+      try {
+        const part = await inspectHistoryEntries(this.deletionEntries(kind, target, lookups), seenFiles)
+        result.fileCount += part.fileCount; result.totalBytes += part.totalBytes; result.missingFiles += part.missingFiles
+        result.errors.push(...part.errors.map((error) => `#${target.itemId} ${target.key}：${error}`))
+      } catch (e) { result.errors.push(`#${target.itemId} ${target.key}：${String(e)}`) }
+    }
     return result
   }
 
