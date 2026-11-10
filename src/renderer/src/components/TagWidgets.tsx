@@ -125,11 +125,17 @@ export function TagContextMenu({
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
     }
+    const onWheel = (e: WheelEvent): void => {
+      // 保留菜单内标签列表的滚动；页面或其他区域滚动时收起右键菜单。
+      if (!(e.target as Element | null)?.closest('.tag-menu-list')) onClose()
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
+    document.addEventListener('wheel', onWheel, { passive: true })
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
+      document.removeEventListener('wheel', onWheel)
     }
   }, [onClose])
 
