@@ -443,7 +443,7 @@ export class LibraryRepo {
     this.db.run(
       `INSERT INTO file_history (item_id, downloadable_id, archived_date, archived_path, filename, etag, size)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [h.itemId, h.downloadableId, h.date, h.archivedPath, h.filename, h.etag, h.size]
+      [h.itemId, h.downloadableId, h.date, this.downloadLocalIn(h.archivedPath), h.filename, h.etag, h.size]
     )
   }
 
@@ -452,7 +452,11 @@ export class LibraryRepo {
       `SELECT archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
        FROM file_history WHERE item_id = ? ORDER BY archived_at DESC, id DESC`,
       [itemId]
-    )
+    ).map((r) => this.fileHistoryOut(itemId, r))
+  }
+
+  private fileHistoryOut(itemId: number, row: FileHistoryEntry): FileHistoryEntry {
+    return { ...row, archivedPath: this.paths ? this.paths.resolveArchivedLocal(itemId, row.archivedPath) : row.archivedPath }
   }
 
   /** 按归档秒分组（同一秒归档的文件为一组），新的在前 */
@@ -469,7 +473,7 @@ export class LibraryRepo {
       `SELECT archived_date AS archivedDate, archived_at AS archivedAt, archived_path AS archivedPath, filename, size
        FROM file_history WHERE item_id = ? AND archived_at = ? ORDER BY filename`,
       [itemId, archivedAt]
-    )
+    ).map((r) => this.fileHistoryOut(itemId, r))
   }
 
   addDownloadRecord(r: {

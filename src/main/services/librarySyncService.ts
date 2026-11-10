@@ -5,6 +5,7 @@ import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { ImageLocalizer } from './imageLocalizer'
 import { existsSync } from 'fs'
+import { basename } from 'path'
 import type { CheckProgressEvent, CheckSummary, ItemDetail } from '../../shared/types'
 import { localDate } from '../util/filenames'
 import { BoothError, isAuthError } from '../booth/errors'
@@ -113,7 +114,7 @@ export class LibrarySyncService {
                 downloadableId: row.downloadableId,
                 date: localDate(),
                 archivedPath: archived,
-                filename: row.localPath.split(/[\/]/).pop() || row.filename,
+                filename: basename(archived),
                 etag: row.lastEtag,
                 size: row.lastSize
               })

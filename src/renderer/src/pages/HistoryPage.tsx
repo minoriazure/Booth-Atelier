@@ -203,7 +203,7 @@ function FilesDetail({ itemId, archivedAt, onClose }: { itemId: number; archived
           <tbody>
             {files.map((f, i) => (
               <tr key={i}>
-                <td className="fname">{f.filename}</td>
+                <td className="fname" title={f.archivedPath}>{f.archivedPath}</td>
                 <td>{f.size != null ? `${(f.size / 1048576).toFixed(1)} MB` : '-'}</td>
                 <td>
                   <button onClick={() => void api.history.revealPath(f.archivedPath)}>打开位置</button>

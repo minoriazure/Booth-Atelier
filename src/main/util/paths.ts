@@ -66,6 +66,17 @@ export class Paths {
     return fromStoredPath(this.downloadRoot, stored)
   }
 
+  /** 旧版归档存的是绝对路径；仅对标准归档布局按当前下载根重新定位。 */
+  resolveArchivedLocal(itemId: number, stored: string): string {
+    if (!isAbsolute(stored)) return this.resolveLocal(stored)
+    const parts = stored.split(/[\\/]/).slice(-4)
+    if (parts.length === 4 && parts[0] === String(itemId) && parts[1] === 'history' &&
+        /^\d{4}-\d{2}-\d{2}$/.test(parts[2]) && parts[3] && parts[3] !== '.' && parts[3] !== '..') {
+      return join(this.downloadRoot, ...parts)
+    }
+    return stored
+  }
+
   /** 视频文件 localPath → 存储值（相对数据根） */
   toStoredDataLocal(abs: string): string {
     return toStoredPath(this.dataRoot, abs)

@@ -1,6 +1,6 @@
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'fs'
 import { createHash } from 'crypto'
-import { dirname } from 'path'
+import { basename, dirname } from 'path'
 import type { DownloadProgressEvent, DownloadDoneEvent, DownloadSource, Fingerprint, FileListRow, DownloadStats } from '../../shared/types'
 import type { DeeplinkClient } from '../booth/deeplink'
 import type { HttpClient } from '../booth/httpClient'
@@ -185,7 +185,7 @@ export class DownloadManager {
       downloadableId,
       date: localDate(),
       archivedPath: archived,
-      filename: d.localPath.split(/[\/]/).pop() || d.filename,
+      filename: basename(archived),
       etag: d.lastEtag,
       size: d.lastSize
     })
