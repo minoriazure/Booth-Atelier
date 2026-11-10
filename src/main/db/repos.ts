@@ -3,12 +3,15 @@ import type { Paths } from '../util/paths'
 import type {
   DownloadableFileRow,
   DownloadableStatus,
+  FileHistoryEntry,
+  FileHistoryGroup,
   ItemDetailRow,
   ItemSummary,
   SnapshotEntry,
-  FileHistoryEntry,
-  FileHistoryGroup
+  TagInfo,
+  TagRef
 } from '../../shared/types'
+import { TAG_LIMITS } from '../../shared/types'
 
 /** 商品图片引用（rid 为 item_images 的 rowid，用于游标分页） */
 export interface ImageRef {
@@ -157,7 +160,7 @@ export class LibraryRepo {
   listSummaries(q?: string): ItemSummary[] {
     const where = q ? 'WHERE (i.title LIKE ? OR i.shop_name LIKE ?)' : ''
     const params = q ? [`%${q}%`, `%${q}%`] : []
-    return this.db.all<ItemSummary>(
+    return this.attachTags(this.db.all<ItemSummaryRow>(
       `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, COALESCE(NULLIF(i.thumbnail_url, ''), i.og_image_url) AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
@@ -167,7 +170,7 @@ export class LibraryRepo {
        ${where}
        GROUP BY i.item_id ORDER BY i.last_list_at DESC, i.item_id DESC`,
       params
-    ).map(boolifyItem)
+    ).map(boolifyItem))
   }
 
   getItemDetail(itemId: number): ItemDetailRow | undefined {
@@ -198,6 +201,7 @@ export class LibraryRepo {
       thumbnailUrl: (i.thumbnail_url as string) ?? null,
       isGift: Number(i.is_gift) === 1,
       isFree: Number(i.is_free) === 1,
+      tags: this.tagsByItem(itemId).get(itemId) ?? [],
       status: (i.status as 'active' | 'missing') ?? 'active',
       itemUrl: String(i.item_url ?? ''),
       ogImageUrl: (i.og_image_url as string) ?? null,
@@ -549,7 +553,7 @@ export class LibraryRepo {
     if (ids.size === 0) return []
     const list = Array.from(ids)
     const placeholders = list.map(() => '?').join(',')
-    return this.db.all<ItemSummary>(
+    return this.attachTags(this.db.all<ItemSummaryRow>(
       `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, COALESCE(NULLIF(i.thumbnail_url, ''), i.og_image_url) AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
@@ -559,7 +563,83 @@ export class LibraryRepo {
        WHERE i.item_id IN (${placeholders})
        GROUP BY i.item_id ORDER BY i.title`,
       list
-    ).map(boolifyItem)
+    ).map(boolifyItem))
+  }
+
+  /** 为商品列表批量挂载 tags（一次查询，避免逐行查库） */
+  private attachTags<T extends { itemId: number }>(rows: T[]): Array<T & { tags: TagRef[] }> {
+    const byItem = this.tagsByItem()
+    return rows.map((r) => ({ ...r, tags: byItem.get(r.itemId) ?? [] }))
+  }
+
+  private tagsByItem(itemId?: number): Map<number, TagRef[]> {
+    const rows = this.db.all<{ item_id: number; id: number; name: string }>(
+      `SELECT it.item_id, t.id, t.name FROM item_tags it JOIN tags t ON t.id = it.tag_id
+       ${itemId === undefined ? '' : 'WHERE it.item_id = ?'} ORDER BY t.name COLLATE NOCASE`,
+      itemId === undefined ? [] : [itemId]
+    )
+    const map = new Map<number, TagRef[]>()
+    for (const r of rows) {
+      const list = map.get(r.item_id) ?? []
+      list.push({ id: r.id, name: r.name })
+      map.set(r.item_id, list)
+    }
+    return map
+  }
+
+  /** 全部 tag 及各自关联的商品数（设置页/管理对话框用） */
+  listTags(): TagInfo[] {
+    return this.db.all<{ id: number; name: string; itemCount: number }>(
+      `SELECT t.id AS id, t.name AS name, COUNT(it.item_id) AS itemCount
+       FROM tags t LEFT JOIN item_tags it ON it.tag_id = t.id
+       GROUP BY t.id ORDER BY t.name COLLATE NOCASE`
+    )
+  }
+
+  createTag(rawName: string): TagRef {
+    const name = normalizeTagName(rawName)
+    const count = this.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM tags')?.n ?? 0
+    if (count >= TAG_LIMITS.total) throw new Error(`tag 总数已达上限（${TAG_LIMITS.total}）`)
+    this.assertTagNameFree(name)
+    this.db.run('INSERT INTO tags (name) VALUES (?)', [name])
+    const id = this.db.get<{ id: number }>('SELECT id FROM tags WHERE name = ?', [name])!.id
+    return { id, name }
+  }
+
+  renameTag(id: number, rawName: string): TagRef {
+    const name = normalizeTagName(rawName)
+    if (!this.db.get('SELECT id FROM tags WHERE id = ?', [id])) throw new Error('标签不存在')
+    this.assertTagNameFree(name, id)
+    this.db.run('UPDATE tags SET name = ? WHERE id = ?', [name, id])
+    return { id, name }
+  }
+
+  /** 删除 tag 及其所有商品关联（单事务） */
+  deleteTag(id: number): void {
+    this.db.transaction(() => {
+      this.db.run('DELETE FROM item_tags WHERE tag_id = ?', [id])
+      this.db.run('DELETE FROM tags WHERE id = ?', [id])
+    })
+  }
+
+  /** 整体替换某商品的 tag 集合（单事务）；超过单商品上限或含不存在的 tag 时整体拒绝 */
+  setItemTags(itemId: number, tagIds: number[]): TagRef[] {
+    const ids = Array.from(new Set(tagIds))
+    if (ids.length > TAG_LIMITS.perItem) throw new Error(`单个商品最多 ${TAG_LIMITS.perItem} 个 tag`)
+    if (!this.db.get('SELECT item_id FROM items WHERE item_id = ?', [itemId])) throw new Error('本地不存在该商品')
+    this.db.transaction(() => {
+      for (const id of ids) {
+        if (!this.db.get('SELECT id FROM tags WHERE id = ?', [id])) throw new Error('标签不存在')
+      }
+      this.db.run('DELETE FROM item_tags WHERE item_id = ?', [itemId])
+      for (const id of ids) this.db.run('INSERT INTO item_tags (item_id, tag_id) VALUES (?, ?)', [itemId, id])
+    })
+    return this.tagsByItem(itemId).get(itemId) ?? []
+  }
+
+  private assertTagNameFree(name: string, exceptId?: number): void {
+    const hit = this.listTags().find((tag) => tag.name.toLowerCase() === name.toLowerCase())
+    if (hit && hit.id !== exceptId) throw new Error('标签名已存在')
   }
 
   /** 协议唤起时的最小登记：商品/链接不存在则建占位行（同步时会被补全） */
@@ -734,6 +814,7 @@ export class LibraryRepo {
       this.db.run('DELETE FROM file_history WHERE item_id = ?', [itemId])
       this.db.run('DELETE FROM download_records WHERE item_id = ?', [itemId])
       this.db.run('DELETE FROM downloadables WHERE item_id = ?', [itemId])
+      this.db.run('DELETE FROM item_tags WHERE item_id = ?', [itemId])
       this.db.run('DELETE FROM items WHERE item_id = ?', [itemId])
     })
   }
@@ -835,4 +916,13 @@ function safeJsonArray(v: unknown): string[] {
 /** SQLite is_gift 是 0/1 → 转为真 boolean（避免 React 渲染出 0） */
 function boolifyItem<T extends { isGift: unknown; isFree: unknown }>(row: T): T & { isGift: boolean; isFree: boolean } {
   return { ...row, isGift: Number(row.isGift) === 1, isFree: Number(row.isFree) === 1 }
+}
+
+type ItemSummaryRow = Omit<ItemSummary, 'tags'>
+
+function normalizeTagName(raw: string): string {
+  const name = String(raw ?? '').trim()
+  if (!name) throw new Error('标签名不能为空')
+  if (name.length > 64) throw new Error('标签名最多 64 个字符')
+  return name
 }

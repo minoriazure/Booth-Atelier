@@ -191,6 +191,19 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     const rid = id.parse(itemId)
     return ctx.removal.remove(rid)
   })
+
+  // ── tags（上限与重名校验在仓储层强制） ──
+  handle('tags:list', () => ctx.repo.listTags())
+  handle('tags:create', (name: unknown) => ctx.repo.createTag(q.parse(name)))
+  handle('tags:rename', (payload: unknown) => {
+    const p = z.object({ id, name: q }).parse(payload)
+    return ctx.repo.renameTag(p.id, p.name)
+  })
+  handle('tags:delete', (tagId: unknown) => ctx.repo.deleteTag(id.parse(tagId)))
+  handle('tags:setItemTags', (payload: unknown) => {
+    const p = z.object({ itemId: id, tagIds: z.array(id) }).parse(payload)
+    return ctx.repo.setItemTags(p.itemId, p.tagIds)
+  })
   handle('library:imageUrl', (remoteUrl: unknown) => {
     const u = q.parse(remoteUrl)
     // 列表卡片等展示位：preview/ 长边 720（未生成回退原图）

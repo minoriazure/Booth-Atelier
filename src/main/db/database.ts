@@ -121,6 +121,15 @@ export class Db {
       this.markDirty()
       log.info('migrations applied: 010_item_images_remote_removed')
     }
+    if (Number(version) < 11) {
+      // 用户自定义 tag：名称大小写不敏感唯一；商品与 tag 的关联由仓储层清理，不依赖外键开关
+      this.db.run(`CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE, created_at TEXT NOT NULL DEFAULT (datetime('now')))`)
+      this.db.run(`CREATE TABLE IF NOT EXISTS item_tags (item_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY (item_id, tag_id))`)
+      this.db.run(`CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags (tag_id)`)
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (11, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 011_tags')
+    }
   }
 
   exec(sql: string): void {

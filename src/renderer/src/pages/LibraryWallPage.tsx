@@ -1,10 +1,26 @@
+import { ItemFilterDropdown, type ItemFilter } from '../components/ItemFilterDropdown'
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MutableRefObject } from 'react'
-import type { ItemSummary } from '../../../shared/types'
+import type { ItemSummary, TagInfo } from '../../../shared/types'
 import { api } from '../api'
 import { useImageUrl } from '../components/useImageUrl'
 import { requestDerivativePriority } from '../components/derivativePriority'
+import { TagBatchDialog, TagContextMenu, TagFilterDropdown, TagManageDialog } from '../components/TagWidgets'
 
-function ItemCard({ item, onOpen }: { item: ItemSummary; onOpen: (id: number) => void }) {
+function ItemCard({
+  item,
+  onOpen,
+  onMenu,
+  selecting,
+  selected,
+  onSelect
+}: {
+  selecting: boolean
+  selected: boolean
+  onSelect: () => void
+  item: ItemSummary
+  onOpen: (id: number) => void
+  onMenu: (itemId: number, x: number, y: number) => void
+}) {
   // 本地图片优先（同步时已下载到商品文件夹），未就绪时轮询本地缓存并触发后台补下
   const fallback = useImageUrl(item.localThumb ? null : item.thumbnailUrl)
   const thumb = item.localThumb || fallback
@@ -30,13 +46,35 @@ function ItemCard({ item, onOpen }: { item: ItemSummary; onOpen: (id: number) =>
     return () => io.disconnect()
   }, [item.itemId])
   return (
-    <div className="card" ref={cardRef} onClick={() => onOpen(item.itemId)}>
+    <div
+      className={`card ${selected ? 'card-selected' : ''}`}
+      ref={cardRef}
+      onClick={() => selecting ? onSelect() : onOpen(item.itemId)}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        onMenu(item.itemId, e.clientX, e.clientY)
+      }}
+    >
+      {selecting && <label className="tag-option card-select" onClick={(e) => e.stopPropagation()}>
+        <input type="checkbox" aria-label={`选择 ${item.title}`} checked={selected} onChange={onSelect} />
+      </label>}
       <span className="booth-id-badge">#{item.itemId}</span>
-      {thumb ? (
-        <img className="thumb" src={thumb} loading="lazy" alt="" />
-      ) : (
-        <div className="thumb placeholder">📦</div>
-      )}
+      <div className="card-cover">
+        {thumb ? (
+          <img className="thumb" src={thumb} loading="lazy" alt="" />
+        ) : (
+          <div className="thumb placeholder">📦</div>
+        )}
+        {item.tags.length > 0 && (
+          <div className="card-tags">
+            {item.tags.map((t) => (
+              <span key={t.id} className="tag-chip" title={t.name}>
+                {t.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="body">
         <div className="title">{item.title}</div>
         <div className="shop-row">
@@ -158,9 +196,20 @@ export default function LibraryWallPage({
 }) {
   const [items, setItems] = useState<ItemSummary[] | null>(null)
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<'all' | 'library' | 'gift' | 'free' | 'undownloaded' | 'updates' | 'delisted'>('all')
+  const [filter, setFilter] = useState<ItemFilter>('all')
   const [sortKey, setSortKey] = useState<SortKey>(() => readSortKey())
   const [scale, setScale] = useState<number>(() => readScale())
+  const [tags, setTags] = useState<TagInfo[]>([])
+  // 标签筛选为多选，组内 OR（命中任一即可）；与状态筛选之间为 AND
+  const [tagFilter, setTagFilter] = useState<number[]>([])
+  const [untagged, setUntagged] = useState(false)
+  const [selecting, setSelecting] = useState(false)
+  const [selectedItems, setSelectedItems] = useState<number[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
+  const tagMutationRef = useRef(0)
+  const [tagRev, setTagRev] = useState(0)
+  const [menu, setMenu] = useState<{ itemId: number; x: number; y: number } | null>(null)
+  const [manageOpen, setManageOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
   const restoredRef = useRef(false)
 
@@ -201,14 +250,28 @@ export default function LibraryWallPage({
 
   useEffect(() => {
     let cancelled = false
+    const mutation = tagMutationRef.current
     void (async () => {
-      const list = query ? await api.library.search(query) : await api.library.list()
-      if (!cancelled) setItems(list)
+      const [list, tagList] = await Promise.all([
+        query ? api.library.search(query) : api.library.list(),
+        api.tags.list()
+      ])
+      if (cancelled || mutation !== tagMutationRef.current) return
+      setItems(list)
+      setTags(tagList)
+      // 已被删除的标签从筛选中剔除
+      const alive = new Set(tagList.map((t) => t.id))
+      setTagFilter((prev) => prev.filter((id) => alive.has(id)))
     })()
     return () => {
       cancelled = true
     }
-  }, [query, version])
+  }, [query, version, tagRev])
+
+  const onItemTagsChange = (itemId: number, next: ItemSummary['tags']): void => {
+    tagMutationRef.current++
+    setItems((prev) => (prev ? prev.map((it) => (it.itemId === itemId ? { ...it, tags: next } : it)) : prev))
+  }
 
   // 后台图片下载完成 → 增量替换该商品（不整页刷新）
   useEffect(() => {
@@ -248,12 +311,14 @@ export default function LibraryWallPage({
 
   const filtered = (() => {
     const matched = (items ?? []).filter((i) => {
-      if (filter === 'library') return !i.isFree && !i.isGift
-      if (filter === 'gift') return i.isGift
-      if (filter === 'free') return i.isFree
-      if (filter === 'undownloaded') return i.fileDownloaded < i.fileTotal
-      if (filter === 'updates') return i.fileUpdateAvailable > 0
-      if (filter === 'delisted') return i.status === 'missing'
+      if (filter === 'library' && (i.isFree || i.isGift)) return false
+      if (filter === 'gift' && !i.isGift) return false
+      if (filter === 'free' && !i.isFree) return false
+      if (filter === 'undownloaded' && i.fileDownloaded >= i.fileTotal) return false
+      if (filter === 'updates' && i.fileUpdateAvailable <= 0) return false
+      if (filter === 'delisted' && i.status !== 'missing') return false
+      if (untagged && i.tags.length > 0) return false
+      if (tagFilter.length > 0 && !i.tags.some((t) => tagFilter.includes(t.id))) return false
       return true
     })
     // 分组各自排序，拼合顺序固定为：库商品 → 赠送 → 免费（同时是免费与赠送的商品归入免费组）
@@ -267,47 +332,78 @@ export default function LibraryWallPage({
 
   return (
     <div ref={rootRef}>
-      <div className="filter-row">
-        <select value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}>
-          <option value="all">全部商品</option>
-          <option value="library">仅库商品</option>
-          <option value="gift">仅赠送</option>
-          <option value="free">仅免费</option>
-          <option value="undownloaded">未下载完</option>
-          <option value="updates">有文件更新</option>
-          <option value="delisted">已下架</option>
-        </select>
-        <span className="count">
-          {filtered.length} / {items.length} 个商品
-        </span>
-        <div className="scale-control" title="卡片大小（Ctrl+滚轮也可调整）">
-          <span className="scale-label">大小</span>
-          <input
-            type="range"
-            min={SCALE_MIN}
-            max={SCALE_MAX}
-            step={SCALE_STEP}
-            value={scale}
-            onChange={(e) => setScale(Number(e.target.value))}
-            aria-label="卡片大小"
+      <div className="filter-row wall-toolbar">
+        <div className="wall-toolbar-filters">
+          <ItemFilterDropdown value={filter} onChange={setFilter} />
+          <TagFilterDropdown
+            tags={tags}
+            untagged={untagged}
+            onUntaggedChange={setUntagged}
+            selected={tagFilter}
+            onChange={setTagFilter}
+            onManage={() => setManageOpen(true)}
           />
-          <span className="scale-value">{scale}%</span>
-        </div>
-        <div className="sort-group">
-          <span className="sort-hint">
-            {SORT_HINT[sortKey]}，顺序：库商品、赠送、免费
+          <span className="count">
+            {filtered.length} / {items.length} 个商品
           </span>
-          <SortSlider value={sortKey} onChange={setSortKey} />
+          <button type="button" className={selecting ? 'tag-filter-btn active' : ''}
+            onClick={() => { setSelecting(!selecting); setSelectedItems([]) }}>
+            {selecting ? '退出批量选择' : '批量标签'}
+          </button>
+        </div>
+        <div className="wall-toolbar-display">
+          <div className="scale-control" title="卡片大小（Ctrl+滚轮也可调整）">
+            <span className="scale-label">大小</span>
+            <input
+              type="range"
+              min={SCALE_MIN}
+              max={SCALE_MAX}
+              step={SCALE_STEP}
+              value={scale}
+              onChange={(e) => setScale(Number(e.target.value))}
+              aria-label="卡片大小"
+            />
+            <span className="scale-value">{scale}%</span>
+          </div>
+          <div className="sort-group" title={`${SORT_HINT[sortKey]}，顺序：库商品、赠送、免费`}>
+            <SortSlider value={sortKey} onChange={setSortKey} />
+          </div>
         </div>
       </div>
+      {selecting && <div className="tag-batch-bar">
+        <span>已选 {selectedItems.length} 个商品{selectedItems.some((id) => !filtered.some((i) => i.itemId === id)) ? '（含筛选隐藏项）' : ''}</span>
+        <button type="button" onClick={() => setSelectedItems(filtered.map((i) => i.itemId))}>全选当前结果</button>
+        <button type="button" disabled={!selectedItems.length} onClick={() => setSelectedItems([])}>清空选择</button>
+        <button type="button" className="primary tag-batch-apply" disabled={!selectedItems.length} onClick={() => setBatchOpen(true)}>添加 / 移除标签…</button>
+      </div>}
       {filtered.length === 0 ? (
         <div className="empty">没有匹配的商品{query ? `（搜索：${query}）` : ''}</div>
       ) : (
         <div className="wall" style={{ '--wall-scale': scale / 100 } as CSSProperties}>
           {filtered.map((i) => (
-            <ItemCard key={i.itemId} item={i} onOpen={onOpen} />
+            <ItemCard key={i.itemId} item={i} selecting={selecting} selected={selectedItems.includes(i.itemId)}
+              onSelect={() => setSelectedItems((prev) => prev.includes(i.itemId) ? prev.filter((id) => id !== i.itemId) : [...prev, i.itemId])} onOpen={onOpen} onMenu={(itemId, x, y) => setMenu({ itemId, x, y })} />
           ))}
         </div>
+      )}
+      {menu && items.some((i) => i.itemId === menu.itemId) && (
+        <TagContextMenu
+          key={menu.itemId}
+          x={menu.x}
+          y={menu.y}
+          itemId={menu.itemId}
+          itemTags={items.find((i) => i.itemId === menu.itemId)?.tags ?? []}
+          tags={tags}
+          onItemTagsChange={onItemTagsChange}
+          onTagsChanged={() => setTagRev((r) => r + 1)}
+          onManage={() => setManageOpen(true)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {batchOpen && <TagBatchDialog itemIds={selectedItems} tags={tags} onItemTagsChange={onItemTagsChange}
+        onChanged={() => setTagRev((r) => r + 1)} onClose={() => setBatchOpen(false)} />}
+      {manageOpen && (
+        <TagManageDialog tags={tags} onChanged={() => setTagRev((r) => r + 1)} onClose={() => setManageOpen(false)} />
       )}
     </div>
   )

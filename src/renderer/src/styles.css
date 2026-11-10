@@ -1100,6 +1100,210 @@ input.invalid {
   color: var(--text-dim);
   font-size: 13px;
 }
+/* 标签筛选下拉 */
+.tag-filter {
+  position: relative;
+}
+.tag-filter-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.tag-filter-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  min-width: 220px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  padding: 8px;
+}
+.tag-filter-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tag-filter-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.tag-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tag-option:hover {
+  background: var(--btn-hover);
+}
+.tag-option input[type='checkbox'] {
+  appearance: none;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  display: grid;
+  place-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 3px;
+  background: var(--bg2);
+  color: var(--accent);
+  cursor: pointer;
+}
+.tag-option input[type='checkbox']:checked {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg2));
+}
+.tag-option input[type='checkbox']:checked::before {
+  content: '';
+  width: 10px;
+  height: 8px;
+  background: currentColor;
+  clip-path: polygon(0 45%, 20% 25%, 40% 50%, 80% 0, 100% 20%, 40% 100%);
+}
+.tag-option input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tag-option input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.tag-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 6px;
+}
+.tag-count {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+/* 封面标签脱离文档流，增删标签不会改变卡片高度 */
+.card-cover {
+  position: relative;
+  flex-shrink: 0;
+}
+/* 卡片上的标签 */
+.card-tags {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  left: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-height: calc(100% - 40px);
+  overflow: hidden;
+}
+.tag-chip {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg2));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--bg2));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  box-sizing: border-box;
+  line-height: 1.4;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 右键标签菜单 */
+.tag-menu {
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  position: fixed;
+  z-index: 150;
+  width: 250px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 10px;
+  font-size: 13px;
+}
+.tag-menu-head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.tag-menu-total {
+  color: var(--text-dim);
+  font-weight: normal;
+}
+.tag-menu-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tag-menu-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.tag-menu-err {
+  color: var(--error);
+  font-size: 12px;
+}
+.tag-menu-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+/* 标签管理弹窗 */
+.tag-manage {
+  width: 560px;
+}
+.tag-manage-list {
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.tag-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+.tag-manage-row input[type='text'] {
+  flex: 1;
+  min-width: 0;
+}
+.tag-manage-row .tag-name {
+  flex: 1;
+  min-width: 0;
+}
 /* 卡片大小滑动条（50–150%），位于筛选行，靠排序组左侧 */
 .scale-control {
   display: flex;
@@ -2084,3 +2288,29 @@ button.danger-solid:hover:not(:disabled) {
 .dl-cell-progress:empty {
   /* 无进度条时留白列 */
 }
+
+.tag-option-active {
+  background: var(--accent-soft);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.tag-option:has(input:disabled) { opacity: 0.6; cursor: not-allowed; }
+.tag-batch-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.card-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.card-select { position: absolute; top: 6px; right: 6px; z-index: 2; background: var(--bg2); }
+.tag-batch-result { white-space: pre-wrap; max-height: 180px; overflow: auto; margin: 12px 0; }
+
+.wall-toolbar { flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; }
+.wall-toolbar-filters, .wall-toolbar-display { display: flex; align-items: center; gap: 10px; }
+.wall-toolbar-filters { flex-wrap: wrap; }
+.wall-toolbar .count { white-space: nowrap; }
+.wall-toolbar-display { margin-left: auto; gap: 20px; }
+.wall-toolbar-display .scale-control, .wall-toolbar-display .sort-group { margin-left: 0; }
+.item-filter-panel { min-width: 160px; gap: 2px; }
+.item-filter-option { display: flex; justify-content: space-between; gap: 20px; text-align: left; background: transparent; border-color: transparent; }
+.item-filter-option[aria-selected='true'] { color: var(--accent); background: var(--accent-soft); }
+.item-filter-option:hover, .item-filter-option:focus-visible { background: var(--btn-hover); }
+.item-filter-option:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.tag-batch-bar { padding: 10px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; }
+.tag-batch-bar > span { font-size: 13px; color: var(--text-dim); }
+.tag-batch-apply { margin-left: auto; }

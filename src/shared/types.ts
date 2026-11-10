@@ -57,6 +57,18 @@ export type DownloadStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'skip
 export type ItemStatus = 'active' | 'missing'
 export type DownloadableStatus = 'remote' | 'downloaded' | 'update_available' | 'missing'
 
+/** 用户自定义标签的上限：单商品 8 个，全局 32 个 */
+export const TAG_LIMITS = { perItem: 8, total: 32 } as const
+
+export interface TagRef {
+  id: number
+  name: string
+}
+
+export interface TagInfo extends TagRef {
+  itemCount: number
+}
+
 export interface ItemSummary {
   itemId: number
   title: string
@@ -71,6 +83,7 @@ export interface ItemSummary {
   fileTotal: number
   fileDownloaded: number
   fileUpdateAvailable: number
+  tags: TagRef[]
 }
 
 export interface ItemDetailRow extends ItemSummary {

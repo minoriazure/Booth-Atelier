@@ -26,7 +26,9 @@ import type {
   LogDayInfo,
   LogPageResult,
   LogSearchResult,
-  LogLevel
+  LogLevel,
+  TagInfo,
+  TagRef
 } from '../shared/types'
 
 export interface VideoProgressEvent {
@@ -64,6 +66,13 @@ export interface BoothAPI {
     openItemDir(id: number): Promise<string>
     refreshItem(id: number): Promise<RefreshItemResult>
     deleteItem(id: number): Promise<RemoveItemResult>
+  }
+  tags: {
+    list(): Promise<TagInfo[]>
+    create(name: string): Promise<TagRef>
+    rename(id: number, name: string): Promise<TagRef>
+    delete(id: number): Promise<void>
+    setItemTags(itemId: number, tagIds: number[]): Promise<TagRef[]>
   }
   updates: {
     checkGlobal(): Promise<CheckSummary>
@@ -188,6 +197,13 @@ const api: BoothAPI = {
     openItemDir: (id) => ipcRenderer.invoke('library:openItemDir', id),
     refreshItem: (id) => ipcRenderer.invoke('library:refreshItem', id),
     deleteItem: (id) => ipcRenderer.invoke('library:deleteItem', id)
+  },
+  tags: {
+    list: () => ipcRenderer.invoke('tags:list'),
+    create: (name) => ipcRenderer.invoke('tags:create', name),
+    rename: (id, name) => ipcRenderer.invoke('tags:rename', { id, name }),
+    delete: (id) => ipcRenderer.invoke('tags:delete', id),
+    setItemTags: (itemId, tagIds) => ipcRenderer.invoke('tags:setItemTags', { itemId, tagIds })
   },
   updates: {
     checkGlobal: () => ipcRenderer.invoke('updates:checkGlobal'),
