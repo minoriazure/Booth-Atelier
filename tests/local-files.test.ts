@@ -36,7 +36,9 @@ it('detects same-size content corruption using a local SHA-256 rather than ETag'
   expect(repo.getDownloadable(1)?.status).toBe('remote')
 })
 it('reports separate space categories without deleting anything', async () => {
-  mkdirSync(paths.historyDir(1), { recursive: true }); writeFileSync(paths.historyFilePath(1, '2026-11-10', 'a'), 'old')
+  const archiveDate = '2026-11-10'
+  mkdirSync(paths.historyDir(1, archiveDate), { recursive: true })
+  writeFileSync(paths.historyFilePath(1, archiveDate, 'a'), 'old')
   paths.ensureItemDataDirs(1); writeFileSync(join(paths.imagesDir(1), 'image'), 'img')
   mkdirSync(join(dir, 'deleted')); writeFileSync(join(dir, 'deleted', 'a'), 'gone')
   expect(await storageUsage(paths.dataRootPath, paths.rootPath, join(dir, 'deleted'))).toMatchObject({ current: 3, history: 3, media: 3, deleted: 4, errors: 0 })
