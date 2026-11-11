@@ -558,14 +558,14 @@ function VideoCard({
 export default function ItemDetailPage({
   itemId,
   version,
-  onBack,
+  onDeleted,
   onChanged,
   onOpenHistory,
   toast
 }: {
   itemId: number
   version: number
-  onBack: () => void
+  onDeleted: () => void
   onChanged: () => void
   onOpenHistory: (itemId: number) => void
   toast: ToastFn
@@ -735,7 +735,7 @@ export default function ItemDetailPage({
       for (const w of r.warnings) toast('warn', w)
       setShowDelete(false)
       onChanged()
-      onBack()
+      onDeleted()
     } catch (e) {
       toast('error', `删除失败：${e instanceof Error ? e.message : e}`)
     } finally {
@@ -872,9 +872,6 @@ export default function ItemDetailPage({
   return (
     <div className="detail2">
       <div className="detail2-top">
-        <button className="back" onClick={onBack}>
-          ← 返回资源库
-        </button>
         <h1>{item.title}</h1>
         <div className="meta">
           <span>{item.shopName || '未知店铺'}</span>

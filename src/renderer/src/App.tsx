@@ -362,6 +362,14 @@ export default function App() {
         <button className={tab === 'log' ? 'active' : ''} onClick={() => navigate({ tab: 'log', detailId: null })}>
           日志
         </button>
+        <div className="nav-history">
+          <button type="button" aria-label="后退" onClick={() => step(-1)} disabled={nav.index === 0}>
+            <span aria-hidden="true">←</span>
+          </button>
+          <button type="button" aria-label="前进" onClick={() => step(1)} disabled={nav.index === nav.entries.length - 1}>
+            <span aria-hidden="true">→</span>
+          </button>
+        </div>
       </div>
 
       <div className="main" ref={mainRef}>
@@ -372,7 +380,7 @@ export default function App() {
             <ItemDetailPage
               itemId={detailId}
               version={libraryVersion}
-              onBack={() => navigate({ tab: 'library', detailId: null })}
+              onDeleted={() => navigate({ tab: 'library', detailId: null })}
               onChanged={() => setLibraryVersion((v) => v + 1)}
               toast={pushToast}
               onOpenHistory={openHistoryFor}

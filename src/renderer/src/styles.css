@@ -218,6 +218,24 @@ select {
   border-bottom-color: var(--accent);
   background: var(--bg);
 }
+.nav-history {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+  margin-bottom: 4px;
+}
+.nav-history button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  font-size: 16px;
+  line-height: 1;
+}
 .nav .badge {
   background: var(--error);
   color: #fff;
@@ -1515,9 +1533,6 @@ input.invalid {
 }
 .detail2-top {
   margin-bottom: 14px;
-}
-.detail2-top .back {
-  margin-bottom: 12px;
 }
 .detail2-top h1 {
   font-size: 19px;
