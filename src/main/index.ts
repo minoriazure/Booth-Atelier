@@ -373,7 +373,7 @@ if (!gotLock) {
           if (w && !w.isDestroyed()) {
             void w.webContents
               .executeJavaScript(`(() => {
-                const el = document.querySelector('.video-slot:not(:empty), .video-list .video-card')
+                const el = document.querySelector('.video-download-card, .video-list .video-card')
                 const main = document.querySelector('.main')
                 if (el && main) { main.scrollTop = el.getBoundingClientRect().top + main.scrollTop - 120; return main.scrollTop }
                 return -1

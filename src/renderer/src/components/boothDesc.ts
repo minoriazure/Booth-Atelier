@@ -9,7 +9,7 @@ export interface BoothDescOptions {
 /**
  * 把 BOOTH 描述 HTML 转成可渲染的形式（当前描述与历史快照共用）：
  * - 远程图片替换为本地媒体 URL
- * - 视频 iframe：有 videos 时替换为占位（由调用方挂载卡片），否则转为打开原链接的链接
+ * - 视频 iframe：当前说明移除匹配的商品视频，历史快照将视频转为外链
  * - 清理内联事件属性与 script/style
  */
 export function buildBoothDescHtml(html: string, opts: BoothDescOptions): string {
@@ -24,8 +24,7 @@ export function buildBoothDescHtml(html: string, opts: BoothDescOptions): string
     if (!opts.videos) {
       return `<a class="history-video-link" href="${encodeEntities(decoded)}" target="_blank" rel="noreferrer">▶ 历史视频（在浏览器中打开）</a>`
     }
-    const v = findVideoBySrc(opts.videos, decoded)
-    if (v) return `<div class="video-slot" data-key="${v.key}"></div>`
+    if (findVideoBySrc(opts.videos, decoded)) return ''
     // 未知 iframe 保留（如 booth 自家），但加安全限制
     return m.replace(/src=/, 'sandbox="allow-scripts allow-same-origin allow-popups" src=')
   })

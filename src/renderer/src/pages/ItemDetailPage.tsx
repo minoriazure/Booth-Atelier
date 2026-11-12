@@ -276,7 +276,7 @@ function Gallery({
 }: {
   images: Array<{ url: string; mediaUrl: string | null; previewMediaUrl: string | null; thumbMediaUrl: string | null; removed?: boolean }>
   videos: ItemVideo[]
-  onVideoPlaceholderClick: () => void
+  onVideoPlaceholderClick: (key: string) => void
 }) {
   // 画廊条目：视频在前（与 BOOTH 网页一致）；未下载视频以封面占位；图片（底层 thumb 360、清晰层 preview 720、放大用原图 orig）
   const slides = useMemo(() => {
@@ -289,7 +289,7 @@ function Gallery({
     }))
     const cover = images[0] ? images[0].thumbMediaUrl || images[0].previewMediaUrl || images[0].url : null
     const vids = videos.map((v) =>
-      v.status === 'downloaded' && v.localPath
+      isLocalVideo(v)
         ? { type: 'video' as const, src: toMedia(v.localPath), orig: null, thumb: v.thumbMediaUrl ?? null, key: v.key, removed: false }
         : { type: 'placeholder' as const, src: cover ?? '', orig: null, thumb: cover, key: v.key, removed: false }
     )
@@ -402,7 +402,13 @@ function Gallery({
               return (
                 <div key={i} className="gallery2-slide" aria-hidden={i !== idx}>
                   {s.type === 'placeholder' ? (
-                    <button type="button" className="gallery2-video-placeholder" onClick={onVideoPlaceholderClick} title="视频未下载，点击前往视频卡片">
+                    <button
+                      type="button"
+                      className="gallery2-video-placeholder"
+                      tabIndex={i === idx ? 0 : -1}
+                      onClick={() => onVideoPlaceholderClick(s.key)}
+                      title="前往视频下载卡片"
+                    >
                       {s.thumb && <img src={s.thumb} alt="" />}
                       <span className="gallery2-video-play">▶</span>
                     </button>
@@ -507,50 +513,42 @@ function Gallery({
   )
 }
 
-/** 描述中的视频卡片（替换 iframe 渲染） */
-function VideoCard({
-  video,
-  onDownload,
-  downloading
-}: {
-  video: ItemVideo
-  onDownload: (key: string) => void
-  downloading: boolean
-}) {
-  const platformName = { youtube: 'YouTube', nicovideo: 'NicoNico', vimeo: 'Vimeo', other: '视频' }[video.platform]
-  if (video.status === 'downloaded' && video.localPath) {
-    return (
-      <div className="video-card">
-        <video className="video-card-player" src={toMedia(video.localPath)} controls preload="metadata" />
-        <div className="video-card-bar">
-          <span className="video-card-tag">已本地化 · {platformName}</span>
-          <button className="mini-btn" onClick={() => void api.videos.reveal(video.localPath!)}>
-            打开位置
-          </button>
-        </div>
-      </div>
-    )
-  }
+const videoPlatforms = { youtube: 'YouTube', nicovideo: 'NicoNico', vimeo: 'Vimeo', other: '视频' }
+
+function isLocalVideo(video: ItemVideo): video is ItemVideo & { localPath: string } {
+  return video.status === 'downloaded' && !!video.localPath
+}
+
+function LocalVideoCard({ video }: { video: ItemVideo & { localPath: string } }) {
+  const [expanded, setExpanded] = useState(false)
+  const playerRef = useRef<HTMLVideoElement>(null)
+  useEffect(() => {
+    const player = playerRef.current
+    if (!expanded || !player) return
+    player.src = toMedia(video.localPath)
+    return () => {
+      player.pause()
+      player.removeAttribute('src')
+      player.load()
+    }
+  }, [expanded, video.localPath])
   return (
     <div className="video-card">
-      <div className="video-card-info">
-        <span className="video-card-tag">▶ {platformName}</span>
-        <span className="video-card-id">{video.videoId}</span>
-      </div>
-      <div className="video-card-actions">
-        <button className="mini-btn primary" disabled={downloading} onClick={() => onDownload(video.key)}>
-          {downloading ? `下载中 ${video.progress}%` : '⬇ 下载视频'}
+      <div className="video-card-bar">
+        <button
+          type="button"
+          className="video-card-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <ChevronIcon dir="next" />
+          <span>{videoPlatforms[video.platform]} · {video.videoId}</span>
         </button>
-        <a className="mini-btn" href={video.url} target="_blank" rel="noreferrer">
-          在线观看 ↗
-        </a>
+        <button type="button" className="mini-btn" onClick={() => void api.videos.reveal(video.localPath)}>
+          打开位置
+        </button>
       </div>
-      {downloading && (
-        <div className="progressbar" style={{ marginTop: 8 }}>
-          <div style={{ width: `${video.progress}%` }} />
-        </div>
-      )}
-      {video.status === 'failed' && video.error && <div className="video-card-error">{video.error}</div>}
+      {expanded && <video className="video-card-player" ref={playerRef} controls preload="metadata" />}
     </div>
   )
 }
@@ -658,6 +656,7 @@ export default function ItemDetailPage({
   // 视频进度
   useEffect(() => {
     const un = api.events.onVideoProgress((e: VideoProgressEvent) => {
+      if (e.itemId !== itemId) return
       setVideoStates((prev) => {
         const cur = prev[e.key]
         if (!cur) return prev
@@ -681,7 +680,7 @@ export default function ItemDetailPage({
       }
     })
     return un
-  }, [load, onChanged, toast])
+  }, [itemId, load, onChanged, toast])
 
   // yt-dlp 检测（懒：只在有视频时查一次）
   useEffect(() => {
@@ -776,7 +775,7 @@ export default function ItemDetailPage({
     }
   }
 
-  /** 描述 HTML：选中历史版本时渲染快照（链接形式视频），否则渲染当前描述（视频占位由下方卡片挂载） */
+  /** 描述 HTML：选中历史版本时渲染快照（链接形式视频），否则渲染当前描述（商品视频由独立区域展示） */
   const processedDesc = useMemo(() => {
     if (!item) return ''
     if (snapshot) {
@@ -789,32 +788,8 @@ export default function ItemDetailPage({
     return buildBoothDescHtml(item.descriptionHtml, { localImages, videos: item.videos })
   }, [item, snapshot])
 
-  // 渲染后把占位 div 替换成视频卡片：用 ref 收集 slot，React Portal 式渲染
   const sideRef = useRef<HTMLElement>(null)
   const sideFilesRef = useRef<HTMLDivElement>(null)
-  const descRef = useRef<HTMLDivElement>(null)
-  const [descRendered, setDescRendered] = useState(0)
-  useEffect(() => {
-    setDescRendered((n) => n + 1)
-  }, [processedDesc])
-
-  useEffect(() => {
-    const root = descRef.current
-    if (!root || !item) return
-    const slots = root.querySelectorAll<HTMLElement>('.video-slot[data-key]')
-    slots.forEach((slot) => {
-      const key = slot.getAttribute('data-key')!
-      const v = videoStates[key] || item.videos.find((x) => x.key === key)
-      if (!v) return
-      slot.innerHTML = ''
-      const holder = document.createElement('div')
-      slot.appendChild(holder)
-      // 用轻量 DOM 渲染卡片（避免为占位引入 portal 树）
-      renderVideoCardDom(holder, v, videoStates[key]?.progress ?? v.progress, videoStates[key]?.status ?? v.status, (k) => {
-        void doDownloadVideo(k)
-      })
-    })
-  }, [processedDesc, videoStates, item, descRendered])
 
   // 让右侧文件列表恰好适配滚动区可视高度（状态栏行数变化时同步更新）
   useEffect(() => {
@@ -834,8 +809,14 @@ export default function ItemDetailPage({
   }, [item])
 
   // 稳定引用：每次渲染新建数组会使画廊的 slides 变化，进而重置加载状态
-  const videoListRef = useRef<HTMLDivElement>(null)
-  const scrollToVideos = useCallback(() => videoListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), [])
+  const downloadCardRefs = useRef(new Map<string, HTMLDivElement>())
+  const scrollToDownloadCard = (key: string): void => {
+    downloadCardRefs.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+  }
+  const setDownloadCardRef = (key: string, card: HTMLDivElement | null): void => {
+    if (card) downloadCardRefs.current.set(key, card)
+    else downloadCardRefs.current.delete(key)
+  }
   const galleryForShow = useMemo(
     () =>
       item
@@ -852,11 +833,12 @@ export default function ItemDetailPage({
 
   if (!item) return <div className="empty">加载商品…</div>
 
-  // 描述链接：单击不跳转（避免误触离开应用），双击才交给系统浏览器打开；视频卡片内的链接不受影响
+  const pendingVideos = videos.filter((v) => !isLocalVideo(v))
+  const localVideos = videos.filter(isLocalVideo)
+
+  // 描述链接双击时交给系统浏览器打开
   const descLinkOf = (target: EventTarget): HTMLAnchorElement | null => {
-    const a = (target as HTMLElement).closest<HTMLAnchorElement>('a[href]')
-    if (!a || a.closest('.video-slot')) return null
-    return a
+    return (target as HTMLElement).closest<HTMLAnchorElement>('a[href]')
   }
   const onDescClick = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (descLinkOf(e.target)) e.preventDefault()
@@ -904,12 +886,42 @@ export default function ItemDetailPage({
       <div className="detail2-grid">
         {/* ── 左列：画廊 + 描述 ── */}
         <div className="detail2-main">
-          <Gallery images={galleryForShow} videos={videos} onVideoPlaceholderClick={scrollToVideos} />
+          <Gallery images={galleryForShow} videos={videos} onVideoPlaceholderClick={scrollToDownloadCard} />
 
-          {videos.length > 0 && ytDlpOk === false && (
-            <div className="panel warn-panel">
-              ⚠ 未检测到 yt-dlp，视频无法本地化。安装：<code>pip install yt-dlp</code> 并确保加入 PATH。
-            </div>
+          {pendingVideos.length > 0 && (
+            <section aria-label="商品视频">
+              <div className="section-title">商品视频（{pendingVideos.length}）</div>
+              <div className="video-download-strip">
+                {pendingVideos.map((v) => (
+                  <div className="video-card video-download-card" key={v.key} ref={(card) => setDownloadCardRef(v.key, card)}>
+                    <a
+                      className="mini-btn"
+                      href={v.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`在线观看 · ${videoPlatforms[v.platform]} · ${v.videoId}`}
+                    >
+                      {videoPlatforms[v.platform]} ↗
+                      <span className="video-card-id">{v.videoId}</span>
+                    </a>
+                    <button
+                      type="button"
+                      className="mini-btn primary"
+                      disabled={v.status === 'downloading'}
+                      title={v.status === 'failed' ? v.error ?? undefined : undefined}
+                      onClick={() => void doDownloadVideo(v.key)}
+                    >
+                      {v.status === 'downloading' ? `下载中 ${v.progress}%` : v.status === 'failed' ? '重试下载' : '下载视频'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {ytDlpOk === false && (
+                <div className="panel warn-panel">
+                  ⚠ 未检测到 yt-dlp，视频无法本地化。安装：<code>pip install yt-dlp</code> 并确保加入 PATH。
+                </div>
+              )}
+            </section>
           )}
 
           <div className="history-row desc-version-row">
@@ -927,22 +939,21 @@ export default function ItemDetailPage({
 
           <div
             className="desc desc-html"
-            ref={descRef}
             onClick={onDescClick}
             onDoubleClick={onDescDoubleClick}
-            // 处理后的描述 HTML（图片已指向本地；iframe 已替换为占位）
             dangerouslySetInnerHTML={{ __html: processedDesc }}
           />
 
-          {/* 描述里未被占位捕获的视频（保险：全部列出一次） */}
-          {videos.length > 0 && (
-            <div className="section-title">商品视频（{videos.length}）</div>
+          {localVideos.length > 0 && (
+            <section aria-label="已下载视频">
+              <div className="section-title">已下载视频（{localVideos.length}）</div>
+              <div className="video-list">
+                {localVideos.map((v) => (
+                  <LocalVideoCard key={v.key} video={v} />
+                ))}
+              </div>
+            </section>
           )}
-          <div className="video-list" ref={videoListRef}>
-            {videos.map((v) => (
-              <VideoCard key={v.key} video={v} onDownload={(k) => void doDownloadVideo(k)} downloading={videoStates[v.key]?.status === 'downloading'} />
-            ))}
-          </div>
         </div>
 
         {/* ── 右列：文件下载管理侧栏 ── */}
@@ -1011,55 +1022,4 @@ export default function ItemDetailPage({
       </div>
     </div>
   )
-}
-
-/** 视频占位 → DOM 卡片（下载进度实时更新） */
-function renderVideoCardDom(
-  holder: HTMLElement,
-  v: ItemVideo,
-  progress: number,
-  status: string,
-  onDownload: (key: string) => void
-): void {
-  if (status === 'downloaded' && v.localPath) {
-    holder.innerHTML = ''
-    const wrap = document.createElement('div')
-    wrap.className = 'video-card'
-    const video = document.createElement('video')
-    video.className = 'video-card-player'
-    video.src = toMedia(v.localPath)
-    video.controls = true
-    video.preload = 'metadata'
-    wrap.appendChild(video)
-    const bar = document.createElement('div')
-    bar.className = 'video-card-bar'
-    bar.innerHTML = `<span class="video-card-tag">已本地化 · ${v.platform}</span>`
-    wrap.appendChild(bar)
-    holder.appendChild(wrap)
-    return
-  }
-  holder.innerHTML = ''
-  const card = document.createElement('div')
-  card.className = 'video-card'
-  const platformName = { youtube: 'YouTube', nicovideo: 'NicoNico', vimeo: 'Vimeo', other: '视频' }[v.platform] || '视频'
-  card.innerHTML = `
-    <div class="video-card-info">
-      <span class="video-card-tag">▶ ${platformName}</span>
-      <span class="video-card-id">${escapeHtml(v.videoId)}</span>
-    </div>
-    <div class="video-card-actions">
-      <button class="mini-btn primary" ${status === 'downloading' ? 'disabled' : ''}>
-        ${status === 'downloading' ? `下载中 ${progress}%` : status === 'failed' ? '重试下载' : '⬇ 下载视频'}
-      </button>
-      <a class="mini-btn" href="${escapeHtml(v.url)}" target="_blank" rel="noreferrer">在线观看 ↗</a>
-    </div>
-    ${status === 'downloading' ? `<div class="progressbar" style="margin-top:8px"><div style="width:${progress}%"></div></div>` : ''}
-    ${status === 'failed' && v.error ? `<div class="video-card-error">${escapeHtml(v.error)}</div>` : ''}
-  `
-  card.querySelector('button')?.addEventListener('click', () => onDownload(v.key))
-  holder.appendChild(card)
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }

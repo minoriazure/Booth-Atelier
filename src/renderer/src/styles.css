@@ -1946,51 +1946,68 @@ button.danger-solid:hover:not(:disabled) {
   border-radius: var(--radius);
   padding: 12px 14px;
 }
+.video-download-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 2px 6px;
+  margin-bottom: 12px;
+}
+.video-download-card {
+  display: grid;
+  gap: 6px;
+  flex: 0 0 150px;
+  min-width: 0;
+  padding: 8px;
+}
+.video-download-card .mini-btn {
+  justify-content: center;
+}
+.video-download-card a.mini-btn {
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.video-card-id {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-family: Consolas, monospace;
+}
+.video-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+.video-card-toggle span {
+  overflow-wrap: anywhere;
+}
+.video-card-toggle svg {
+  flex-shrink: 0;
+}
+.video-card-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
 .video-card-player {
+  display: block;
   width: 100%;
   max-height: 480px;
+  margin-top: 8px;
   background: #000;
   border-radius: 6px;
 }
 .video-card-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-}
-.video-card-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 9px;
-}
-.video-card-tag {
-  font-size: 12px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  padding: 3px 9px;
-  border-radius: 4px;
-}
-.video-card-id {
-  font-size: 12px;
-  color: var(--text-dim);
-  font-family: Consolas, monospace;
-}
-.video-card-actions {
-  display: flex;
   gap: 8px;
-  align-items: center;
 }
-.video-card-error {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--error);
-}
-.video-slot {
-  margin: 14px 0;
-}
-.video-slot:empty {
-  display: none;
+.video-card-bar .mini-btn {
+  flex-shrink: 0;
 }
 
 /* 描述区（网页风格还原） */

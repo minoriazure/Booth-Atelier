@@ -1,5 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
+import type { VideoProgressEvent } from '../src/preload/index'
+import type { ItemVideo } from '../src/shared/types'
 
 const wait = (ms = 35) => new Promise<void>((done) => setTimeout(done, ms))
 const assert = (condition: unknown, message: string): void => { if (!condition) throw new Error(message) }
@@ -70,6 +72,98 @@ Object.assign(window, { runRegression: async () => {
     }
     wallBench.push({ count, renderSettledMs, maxScrollProbeMs: Math.max(...frameMs), frameTimeouts })
   }
+  const { default: ItemDetailPage } = await import('../src/renderer/src/pages/ItemDetailPage')
+  const videos: ItemVideo[] = Array.from({ length: 12 }, (_, i) => ({
+    key: `youtube:video-${i}`,
+    platform: 'youtube',
+    videoId: `video-${i}`,
+    url: `https://www.youtube.com/watch?v=video-${i}`,
+    embedUrl: `https://www.youtube.com/embed/video-${i}`,
+    localPath: i === 0 ? 'C:/booth/video-0.mp4' : null,
+    status: i === 0 ? 'downloaded' : 'remote',
+    progress: i === 0 ? 100 : 0
+  }))
+  let emitVideoProgress: ((event: VideoProgressEvent) => void) | undefined
+  Object.assign(api.events as object, {
+    onVideoProgress: (handler: (event: VideoProgressEvent) => void) => {
+      emitVideoProgress = handler
+      return () => { emitVideoProgress = undefined }
+    }
+  })
+  Object.assign(api.images as object, { enqueueItem: async () => {}, checkItem: async () => ({ redownload: 0, derivMissing: 0 }) })
+  Object.assign(api.history as object, { listDescriptionEntries: async () => [], listFileGroups: async () => [] })
+  let revealedVideoPath: string | undefined
+  Object.assign(api, {
+    library: {
+      getItem: async () => ({
+        ...item, localGallery: [], downloadables: [], videos,
+        descriptionHtml: `<p>Product description</p><iframe src="${videos[0].embedUrl}"></iframe>`
+      })
+    },
+    videos: {
+      checkYtDlp: async () => ({ found: true }),
+      download: async () => ({ ok: true }),
+      ensureThumb: async () => null,
+      reveal: async (path: string) => { revealedVideoPath = path }
+    }
+  })
+  const renderDetail = () => root.render(
+    <ItemDetailPage itemId={1} version={0} onDeleted={() => {}} onChanged={() => {}} toast={() => {}} onOpenHistory={() => {}} />
+  )
+  renderDetail()
+  await wait()
+  const strip = document.querySelector<HTMLDivElement>('.video-download-strip')!
+  const desc = document.querySelector('.desc-html')!
+  const localList = document.querySelector('.video-list')!
+  assert(strip.childElementCount === 11 && strip.scrollWidth > strip.clientWidth, 'undownloaded videos did not overflow horizontally')
+  assert(strip.compareDocumentPosition(desc) & Node.DOCUMENT_POSITION_FOLLOWING, 'download strip did not precede description')
+  assert(desc.compareDocumentPosition(localList) & Node.DOCUMENT_POSITION_FOLLOWING, 'local videos did not follow description')
+  assert(!document.querySelector('.video-card-player, .desc-html iframe'), 'description loaded a player before expansion')
+  const activeSlide = () => document.querySelector('.gallery2-slide[aria-hidden="false"]')!
+  assert(activeSlide().querySelector<HTMLVideoElement>('video[controls]')?.getAttribute('src')?.endsWith('video-0.mp4') &&
+    !activeSlide().querySelector('button'), 'downloaded video did not play inline in the gallery')
+
+  document.querySelector<HTMLButtonElement>('.gallery2-nav.next')!.click()
+  await wait()
+  const pendingCard = strip.firstElementChild!
+  let scrolledToCard = false
+  pendingCard.scrollIntoView = () => { scrolledToCard = true }
+  document.querySelector<HTMLButtonElement>('.gallery2-slide[aria-hidden="false"] .gallery2-video-placeholder')!.click()
+  assert(scrolledToCard, 'gallery did not target the matching download card')
+  pendingCard.querySelector('button')!.click()
+  await wait()
+  assert(pendingCard.querySelector('button')!.disabled, 'video download did not enter progress state')
+  videos[1] = { ...videos[1], status: 'downloaded', localPath: 'C:/booth/video-1.mp4', progress: 100 }
+  emitVideoProgress!({ key: videos[1].key, itemId: 1, progress: 100, status: 'downloaded', localPath: videos[1].localPath! })
+  await wait()
+  assert(!pendingCard.isConnected && strip.childElementCount === 10, 'completed download remained in the strip')
+  assert(activeSlide().querySelector<HTMLVideoElement>('video[controls]')?.getAttribute('src')?.endsWith('video-1.mp4') &&
+    !activeSlide().querySelector('button'), 'completed download did not replace its gallery placeholder with a player')
+  const toggle = localList.querySelector<HTMLButtonElement>(':scope > :last-child .video-card-toggle')!
+  assert(toggle.getAttribute('aria-expanded') === 'false' && !document.querySelector('.video-card-player'), 'new download was not collapsed')
+  const revealButton = toggle.parentElement!.querySelector<HTMLButtonElement>('.mini-btn')!
+  revealButton.click()
+  await wait()
+  assert(revealedVideoPath === videos[1].localPath && toggle.getAttribute('aria-expanded') === 'false',
+    'opening the file location while collapsed failed or expanded the player')
+  toggle.click()
+  await wait()
+  const player = document.querySelector('.video-card-player')!
+  assert(player.getAttribute('src')?.startsWith('image-cache://local/'), 'expansion did not load the local video')
+  toggle.click()
+  await wait()
+  assert(!player.isConnected && !player.hasAttribute('src'), 'collapse did not unload the video')
+  assert(revealButton.isConnected, 'collapse removed the file location button')
+  toggle.click()
+  await wait()
+  const reopenedPlayer = document.querySelector('.video-card-player')!
+  root.render(null)
+  await wait()
+  assert(!reopenedPlayer.isConnected && !reopenedPlayer.hasAttribute('src'), 'leaving detail did not unload the video')
+  renderDetail()
+  await wait()
+  assert(document.querySelectorAll('.video-card-toggle[aria-expanded="false"]').length === 2 &&
+    !document.querySelector('.video-card-player'), 'reopening detail restored an expanded video')
   root.unmount()
-  return { passed: ['DOM sanitizer', 'history rapid switching', 'dark/light CSS', 'tag keyboard selection', 'focus restoration', 'library wall 100/1000/5000'], themeBackgrounds: colors, wallBench }
+  return { passed: ['DOM sanitizer', 'history rapid switching', 'dark/light CSS', 'tag keyboard selection', 'focus restoration', 'library wall 100/1000/5000', 'detail video layout, inline gallery playback, download transition and lazy player lifecycle'], themeBackgrounds: colors, wallBench }
 } })

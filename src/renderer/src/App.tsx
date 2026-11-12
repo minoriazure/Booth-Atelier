@@ -378,6 +378,7 @@ export default function App() {
             <LibraryWallPage version={libraryVersion} onOpen={openDetail} scrollMemory={wallScrollRef} />
           ) : (
             <ItemDetailPage
+              key={detailId}
               itemId={detailId}
               version={libraryVersion}
               onDeleted={() => navigate({ tab: 'library', detailId: null })}
