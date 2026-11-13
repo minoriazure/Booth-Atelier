@@ -3,6 +3,8 @@ import type { Paths } from '../util/paths'
 import type {
   DownloadableFileRow,
   DownloadableStatus,
+  DownloadInventory,
+  DownloadSource,
   FileHistoryEntry,
   FileHistoryGroup,
   ItemDetailRow,
@@ -246,17 +248,32 @@ export class LibraryRepo {
     return this.db.get<{ hash: string | null }>('SELECT local_sha256 AS hash FROM downloadables WHERE downloadable_id = ?', [downloadableId])?.hash ?? null
   }
 
-  setQueuedAt(downloadableId: number, at: string | null): void {
-    this.db.run('UPDATE downloadables SET queued_at = ? WHERE downloadable_id = ?', [at, downloadableId])
+  setQueuedAt(downloadableId: number, at: string | null, source?: DownloadSource): void {
+    this.db.run('UPDATE downloadables SET queued_at = ?, queued_source = ? WHERE downloadable_id = ?', [
+      at, at && source === 'manual' ? source : null, downloadableId
+    ])
   }
 
   /** 排队/下载中的任务（按入队顺序，重启恢复用） */
+  listQueuedDownloads(): Array<{ downloadableId: number; itemId: number; source: DownloadSource; queuedAt: string }> {
+    return this.db.all(
+      `SELECT downloadable_id AS downloadableId, item_id AS itemId, COALESCE(queued_source, 'initial') AS source,
+         queued_at AS queuedAt
+       FROM downloadables WHERE queued_at IS NOT NULL ORDER BY queued_at, downloadable_id`
+    )
+  }
+
   listQueuedIds(): number[] {
-    return this.db
-      .all<{ downloadable_id: number }>(
-        `SELECT downloadable_id FROM downloadables WHERE queued_at IS NOT NULL ORDER BY queued_at, downloadable_id`
-      )
-      .map((r) => r.downloadable_id)
+    return this.listQueuedDownloads().map((r) => r.downloadableId)
+  }
+
+  listRedownloadTargets(itemId?: number): Array<{ downloadableId: number; itemId: number }> {
+    return this.db.all(
+      `SELECT downloadable_id AS downloadableId, item_id AS itemId
+       FROM downloadables WHERE status != 'missing'${itemId === undefined ? '' : ' AND item_id = ?'}
+       ORDER BY item_id DESC, downloadable_id`,
+      itemId === undefined ? [] : [itemId]
+    )
   }
 
   /**
@@ -291,6 +308,19 @@ export class LibraryRepo {
       `UPDATE downloadables SET status = 'remote', local_path = NULL, local_size = NULL WHERE downloadable_id = ?`,
       [downloadableId]
     )
+  }
+
+  downloadInventory(): DownloadInventory {
+    return this.db.get<DownloadInventory>(`
+      SELECT COUNT(CASE WHEN is_free = 0 THEN 1 END) AS items,
+             COUNT(CASE WHEN is_free = 1 THEN 1 END) AS freeItems,
+             COALESCE(SUM(CASE WHEN is_free = 0 THEN fileCount END), 0) AS files,
+             COALESCE(SUM(CASE WHEN is_free = 1 THEN fileCount END), 0) AS freeFiles
+      FROM (
+        SELECT i.is_free, COUNT(d.downloadable_id) AS fileCount
+        FROM items i LEFT JOIN downloadables d ON d.item_id = i.item_id
+        GROUP BY i.item_id
+      )`)!
   }
 
   /** 全文件列表（含最近下载记录状态、队列/活动状态由 DownloadManager 运行时合并） */
@@ -377,10 +407,11 @@ export class LibraryRepo {
   }
 
   /** localPath 为绝对路径，入库时转为相对下载根的存储值 */
-  markDownloaded(downloadableId: number, localPath: string, localSize: number): void {
+  markDownloaded(downloadableId: number, localPath: string, localSize: number, sha256?: string): void {
     this.db.run(
-      `UPDATE downloadables SET status = 'downloaded', local_path = ?, local_size = ?, last_checked_at = datetime('now') WHERE downloadable_id = ?`,
-      [this.downloadLocalIn(localPath), localSize, downloadableId]
+      `UPDATE downloadables SET status = 'downloaded', local_path = ?, local_size = ?,
+        local_sha256 = COALESCE(?, local_sha256), last_checked_at = datetime('now') WHERE downloadable_id = ?`,
+      [this.downloadLocalIn(localPath), localSize, sha256 ?? null, downloadableId]
     )
   }
 

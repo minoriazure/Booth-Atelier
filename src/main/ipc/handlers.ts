@@ -364,9 +364,12 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     return ctx.downloads.stats
   })
   handle('downloads:cancel', (dlId: unknown) => ctx.downloads.cancel(id.parse(dlId)))
+  handle('downloads:redownloadAll', () => ctx.downloads.redownloadAll())
+  handle('downloads:redownloadItem', (itemId: unknown) => ctx.downloads.redownloadAll(id.parse(itemId)))
   handle('downloads:downloadNow', (dlId: unknown) => ctx.downloads.downloadNow(id.parse(dlId), 'manual'))
   handle('downloads:stats', () => ctx.downloads.stats)
   handle('downloads:list', () => ctx.downloads.listFiles())
+  handle('downloads:inventory', () => ctx.repo.downloadInventory())
   handle('downloads:pauseAll', () => {
     ctx.downloads.pauseAll()
     return ctx.downloads.stats

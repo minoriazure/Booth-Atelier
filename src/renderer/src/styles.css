@@ -2362,8 +2362,57 @@ button.danger-solid:hover:not(:disabled) {
   white-space: nowrap;
   line-height: 1.4;
 }
+.dl-table .dl-group-row .dl-cell-item {
+  padding: 0;
+}
+.dl-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+.dl-group-toggle:focus-visible {
+  outline-offset: -2px;
+}
+.dl-group-title {
+  min-width: 0;
+}
+.dl-group-chevron {
+  flex: 0 0 7px;
+  height: 7px;
+  border-right: 1px solid var(--text-dim);
+  border-bottom: 1px solid var(--text-dim);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+}
+.dl-group-toggle[aria-expanded='true'] .dl-group-chevron {
+  transform: rotate(45deg);
+}
+.dl-group-count {
+  color: var(--text-dim);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dl-child-row > td {
+    animation: dl-child-appear 150ms ease-out;
+  }
+}
+@keyframes dl-child-appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 .dl-cell-status .badge {
   white-space: nowrap;
+}
+.dl-group-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 .dl-cell-file {
   overflow: hidden;

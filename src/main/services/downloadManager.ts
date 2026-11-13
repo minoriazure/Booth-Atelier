@@ -26,6 +26,7 @@ interface Job {
 interface ActiveJob extends Job {
   recordId: number
   abort: AbortController
+  progress: FileListRow['progress']
 }
 
 /**
@@ -71,7 +72,7 @@ export class DownloadManager {
     if (this.active.has(downloadableId)) return false
     if (this.queue.some((j) => j.downloadableId === downloadableId)) return false
     this.queue.push({ downloadableId, itemId: d.itemId, source, enqueuedAt: Date.now() })
-    this.repo.setQueuedAt(downloadableId, new Date().toISOString()) // 持久化：重启后恢复排队，不回退待下载
+    this.repo.setQueuedAt(downloadableId, new Date().toISOString(), source)
     log.info(`queued (${source}): ${describeLink({ itemId: d.itemId, itemTitle: this.repo.getItemTitle(d.itemId), downloadableId, filename: d.filename })}`)
     this.onQueueChanged?.()
     if (!deferPump) this.pump()
@@ -104,7 +105,7 @@ export class DownloadManager {
       job = { downloadableId, itemId: d.itemId, source, enqueuedAt: Date.now() }
     }
     // 排队标记保留：下载中/中断后重启都能经 restoreQueue 恢复；runJob 结束时清
-    this.repo.setQueuedAt(downloadableId, new Date().toISOString())
+    this.repo.setQueuedAt(downloadableId, new Date().toISOString(), job.source)
     // 决策点：downloadOne 的 resolve+probe 完成后才 settle（不是下载完成）——
     // skipped = 本地已下载且指纹一致（未重新下载）；probe 前异常由 runJob finally 兜底 'started'
     let settle!: (r: 'started' | 'skipped') => void
@@ -151,18 +152,41 @@ export class DownloadManager {
     return n
   }
 
+  /** 强制下载所有有效文件，保留正在执行的任务以及已有排队顺序。 */
+  redownloadAll(itemId?: number): number {
+    if (this.disposed) return 0
+    const queued = new Map(this.queue.map((job) => [job.downloadableId, job]))
+    const now = Date.now()
+    const jobs: Job[] = this.repo.listRedownloadTargets(itemId)
+      .filter(({ downloadableId }) => queued.has(downloadableId) || !this.active.has(downloadableId))
+      .map((target) => ({ ...target, source: 'manual', enqueuedAt: queued.get(target.downloadableId)?.enqueuedAt ?? now }))
+    if (jobs.length === 0) return 0
+
+    this.repo.transaction(() => {
+      for (const job of jobs) {
+        this.repo.setQueuedAt(job.downloadableId, new Date(job.enqueuedAt).toISOString(), job.source)
+      }
+    })
+    for (const job of jobs) {
+      const existing = queued.get(job.downloadableId)
+      if (existing) existing.source = job.source
+      else this.queue.push(job)
+    }
+    this.resumeAll()
+    log.info(`redownload: ${itemId === undefined ? 'all items' : `item=#${itemId}`}, scheduled ${jobs.length} files`)
+    return jobs.length
+  }
+
   /**
    * 重启恢复：queued_at 非空的任务（排队中/下载中断）按入队顺序重新入队并自动开始，
    * 不回退到「待下载」。
    */
   restoreQueue(): number {
-    const ids = this.repo.listQueuedIds()
+    const queued = new Set(this.queue.map((job) => job.downloadableId))
     let n = 0
-    for (const id of ids) {
-      if (this.active.has(id) || this.queue.some((j) => j.downloadableId === id)) continue
-      const d = this.repo.getDownloadable(id)
-      if (!d) continue
-      this.queue.push({ downloadableId: id, itemId: d.itemId, source: 'initial', enqueuedAt: Date.now() })
+    for (const { queuedAt, ...job } of this.repo.listQueuedDownloads()) {
+      if (this.active.has(job.downloadableId) || queued.has(job.downloadableId)) continue
+      this.queue.push({ ...job, enqueuedAt: Date.parse(queuedAt) || Date.now() })
       n++
     }
     if (n > 0) {
@@ -323,6 +347,7 @@ export class DownloadManager {
   /** 全文件列表：DB 行 + 运行时队列/活动状态合并 */
   listFiles(): FileListRow[] {
     const rows = this.repo.listAllFileRows()
+    const queued = new Set(this.queue.map((job) => job.downloadableId))
     return rows.map((r) => ({
       downloadableId: r.downloadableId,
       itemId: r.itemId,
@@ -332,8 +357,9 @@ export class DownloadManager {
       localPath: r.localPath,
       localSize: r.localSize,
       lastSize: r.lastSize,
-      inQueue: this.queue.some((j) => j.downloadableId === r.downloadableId) || !!r.queuedAt,
+      inQueue: queued.has(r.downloadableId) || !!r.queuedAt,
       active: this.active.has(r.downloadableId),
+      progress: this.active.get(r.downloadableId)?.progress ?? null,
       failed: !!r.failed && !this.active.has(r.downloadableId),
       lastError: r.lastError
     }))
@@ -356,6 +382,7 @@ export class DownloadManager {
   private pump(): void {
     if (this.paused || this.userPaused) return
     while (this.active.size < this.concurrency && this.queue.length > 0) {
+      if (this.active.has(this.queue[0].downloadableId)) return // 暂停后立即恢复时等待原任务释放文件
       const job = this.queue.shift()!
       void this.runJob(job)
     }
@@ -373,7 +400,7 @@ export class DownloadManager {
       status: 'running'
     })
     const abort = new AbortController()
-    this.active.set(job.downloadableId, { ...job, recordId, abort })
+    this.active.set(job.downloadableId, { ...job, recordId, abort, progress: null })
 
     const d = this.repo.getDownloadable(job.downloadableId)
     const label = d?.filename || `#${job.downloadableId}`
@@ -386,8 +413,7 @@ export class DownloadManager {
 
       // skipped 时也保留：markDownloaded 幂等（local_size 对齐磁盘真值）、
       // setQueuedAt 清 downloadNow 写入的排队标记、updateFingerprint 刷新 last_checked_at
-      this.repo.markDownloaded(job.downloadableId, result.path, result.size)
-      if (result.sha256) this.repo.run('UPDATE downloadables SET local_sha256 = ? WHERE downloadable_id = ?', [result.sha256, job.downloadableId])
+      this.repo.markDownloaded(job.downloadableId, result.path, result.size, result.sha256)
       this.repo.setQueuedAt(job.downloadableId, null)
       if (result.etag) {
         this.repo.updateFingerprint(job.downloadableId, {
@@ -473,6 +499,12 @@ export class DownloadManager {
     }
   }
 
+  private reportProgress(event: DownloadProgressEvent): void {
+    const active = this.active.get(event.downloadableId)
+    if (active) active.progress = { done: event.bytesDone, total: event.bytesTotal }
+    this.onProgress?.(event)
+  }
+
   private async downloadOne(
     job: Job,
     signal: AbortSignal,
@@ -498,6 +530,7 @@ export class DownloadManager {
       resolved = { dlurl: d.fallbackUrl, filename: `${d.filename || `downloadable_${job.downloadableId}`}.zip` }
       fp = { etag: null, size: null, lastModified: null, contentType: 'application/zip' }
     }
+    if (signal.aborted) throw new BoothError('已取消', 'invalid')
     const filename = sanitizeFilename(resolved.filename)
     // 下载根所在磁盘/父目录不存在（如外接盘未挂载）：直接失败，不在别处静默创建目录
     if (!existsSync(this.paths.rootPath) && !existsSync(dirname(this.paths.rootPath))) {
@@ -586,6 +619,7 @@ export class DownloadManager {
     const ws = createWriteStream(partPath, { flags: startByte > 0 ? 'a' : 'w' })
     const hash = startByte > 0 ? null : createHash('sha256') // 续传时放弃整体 hash（后续可重算）
     let done = startByte
+    this.reportProgress({ downloadableId: job.downloadableId, itemId: job.itemId, filename, bytesDone: done, bytesTotal: total ?? 0 })
     let lastProgressAt = Date.now()
     const reader = res.body.getReader()
     let writeError: Error | null = null
@@ -641,7 +675,7 @@ export class DownloadManager {
           const now = Date.now()
           if (now - lastProgressAt > 500) {
             lastProgressAt = now
-            this.onProgress?.({
+            this.reportProgress({
               downloadableId: job.downloadableId,
               itemId: job.itemId,
               filename,
@@ -682,7 +716,7 @@ export class DownloadManager {
     const archivedPath = this.archiveExisting(job, finalPath, filename, d)
     renameSync(partPath, finalPath)
     rmSync(partPath + '.json', { force: true })
-    this.onProgress?.({ downloadableId: job.downloadableId, itemId: job.itemId, filename, bytesDone: actual, bytesTotal: actual })
+    this.reportProgress({ downloadableId: job.downloadableId, itemId: job.itemId, filename, bytesDone: actual, bytesTotal: actual })
     return { path: finalPath, size: actual, filename, etag: fp.etag, lastModified: fp.lastModified, archivedPath, skipped: false, sha256 }
   }
 

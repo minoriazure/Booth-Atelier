@@ -1,7 +1,7 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import type { VideoProgressEvent } from '../src/preload/index'
-import type { ItemVideo } from '../src/shared/types'
+import type { DownloadProgressEvent, FileListRow, ItemVideo } from '../src/shared/types'
 
 const wait = (ms = 35) => new Promise<void>((done) => setTimeout(done, ms))
 const assert = (condition: unknown, message: string): void => { if (!condition) throw new Error(message) }
@@ -51,6 +51,81 @@ Object.assign(window, { runRegression: async () => {
   assert(document.activeElement === document.querySelector('.tag-menu-input'), 'input focus not restored')
   const { default: LibraryWallPage } = await import('../src/renderer/src/pages/LibraryWallPage')
   const api = (window as unknown as { boothAPI: Record<string, unknown> }).boothAPI
+  const { default: UpdatesPage } = await import('../src/renderer/src/pages/UpdatesPage')
+  const file: FileListRow = {
+    downloadableId: 1, itemId: 1, itemTitle: 'Grouped product', filename: 'finished.zip',
+    status: 'downloaded', localPath: null, localSize: 100, lastSize: 100,
+    inQueue: false, active: false, progress: null, failed: false, lastError: null
+  }
+  let emitDownloadProgress: ((event: DownloadProgressEvent) => void) | undefined
+  let redownloads = 0
+  let openedItem: number | undefined
+  let redownloadedItem: number | undefined
+  Object.assign(api, { library: { openItemDir: async (id: number) => { openedItem = id; return '' } } })
+  Object.assign(api, { downloads: {
+    list: async () => [file, {
+      ...file, downloadableId: 2, filename: 'active.zip', status: 'remote', localSize: null,
+      lastSize: 300, active: true, progress: { done: 100, total: 300 }
+    }, { ...file, itemId: 2, downloadableId: 3, itemTitle: 'Another product' }, {
+      ...file, itemId: 2, downloadableId: 4, itemTitle: 'Another product', status: 'missing'
+    }],
+    inventory: async () => ({ items: 1, files: 2, freeItems: 1, freeFiles: 2 }),
+    stats: async () => ({ active: 1, queued: 0, paused: false, userPaused: false }),
+    redownloadAll: async () => { redownloads++; return 2 },
+    redownloadItem: async (id: number) => { redownloadedItem = id; return 1 }
+  } })
+  Object.assign(api.events as object, {
+    onQueueChanged: () => () => {},
+    onDownloadDone: () => () => {},
+    onDownloadError: () => () => {},
+    onDownloadProgress: (handler: (event: DownloadProgressEvent) => void) => {
+      emitDownloadProgress = handler
+      return () => { emitDownloadProgress = undefined }
+    }
+  })
+  const renderUpdates = (key: number) => root.render(<UpdatesPage key={key} version={0} toast={() => {}} onRunCheck={() => {}} />)
+  renderUpdates(0)
+  await wait()
+  const groupButtons = [...document.querySelectorAll<HTMLButtonElement>('.dl-group-toggle')]
+  assert(groupButtons.length === 2 && !document.querySelector('.dl-child-row'), 'download groups did not start collapsed')
+  assert(document.querySelector('.dl-stats')?.textContent?.includes('共 1 个免费商品，包含 2 个文件'), 'download inventory did not list free products separately')
+  const secondGroupBadges = [...document.querySelectorAll('.dl-group-row:nth-child(2) .dl-group-status .badge')]
+  assert(secondGroupBadges.map((badge) => badge.textContent).join('/') === '已完成/存在失效文件', 'completed group lost its separate missing-files badge')
+  const groupActions = document.querySelectorAll<HTMLButtonElement>('.dl-group-row .actions-inner button')
+  assert(groupActions[0].textContent?.trim() === '整组重下' && groupActions[1].textContent?.trim() === '位置', 'download group actions have the wrong labels or order')
+  groupActions[0].click()
+  groupActions[1].click()
+  await wait()
+  assert(openedItem === 1 && redownloadedItem === 1, 'collapsed group actions did not target their product')
+  assert(document.querySelector('.dl-group-row .dl-row-pct')?.textContent === '50.0%', 'initial progress was not summed by bytes')
+  groupButtons[0].click()
+  await wait()
+  const children = document.querySelectorAll('.dl-child-row')
+  assert(children.length === 2 && groupButtons[0].getAttribute('aria-expanded') === 'true', 'expanding a download group did not reveal its files')
+  const childFile = children[0].querySelector('.dl-cell-file')!
+  const groupFile = document.querySelector('.dl-group-row .dl-cell-file')!
+  assert(childFile.getBoundingClientRect().x === groupFile.getBoundingClientRect().x &&
+    getComputedStyle(childFile).paddingLeft === getComputedStyle(groupFile).paddingLeft, 'expanded file names are not aligned with their column')
+  emitDownloadProgress?.({ downloadableId: 2, itemId: 1, filename: 'active.zip', bytesDone: 200, bytesTotal: 300 })
+  await wait()
+  assert(document.querySelector('.dl-group-row .dl-row-pct')?.textContent === '75.0%', 'live progress did not update the group')
+  groupButtons[0].click()
+  await wait()
+  assert(!document.querySelector('.dl-child-row'), 'collapsing a download group left child rows mounted')
+  groupButtons[0].click()
+  await wait()
+  renderUpdates(1)
+  await wait()
+  assert(!document.querySelector('.dl-child-row'), 'download groups remembered expansion after remount')
+  const redownloadButton = [...document.querySelectorAll('button')].find((button) => button.textContent === '全部重新下载')!
+  redownloadButton.click()
+  await wait()
+  assert(redownloads === 1, 'bulk redownload button did not dispatch')
+  const completedFilter = [...document.querySelectorAll<HTMLButtonElement>('.dl-filter')].find((button) => button.textContent?.startsWith('已完成'))!
+  completedFilter.click()
+  await wait()
+  assert(document.querySelector('.dl-group-row .dl-cell-status')?.textContent === '下载中', 'filtering hid an unfinished file from the group status')
+
   Object.assign(api.tags as object, { list: async () => [] })
   const wallBench: unknown[] = []
   const scroller = document.getElementById('root')!
@@ -167,5 +242,5 @@ Object.assign(window, { runRegression: async () => {
   assert(document.querySelectorAll('.video-card-toggle[aria-expanded="false"]').length === 2 &&
     !document.querySelector('.video-card-player'), 'reopening detail restored an expanded video')
   root.unmount()
-  return { passed: ['DOM sanitizer', 'history rapid switching', 'dark/light CSS', 'tag keyboard selection', 'focus restoration', 'library wall 100/1000/5000', 'detail video layout, inline gallery playback, download transition and lazy player lifecycle'], themeBackgrounds: colors, wallBench }
+  return { passed: ['DOM sanitizer', 'history rapid switching', 'dark/light CSS', 'tag keyboard selection', 'focus restoration', 'download grouping, byte progress and bulk redownload', 'library wall 100/1000/5000', 'detail video layout, inline gallery playback, download transition and lazy player lifecycle'], themeBackgrounds: colors, wallBench }
 } })

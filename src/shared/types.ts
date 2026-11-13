@@ -357,6 +357,13 @@ export interface CheckAllImagesResult extends ReconcileResult {
   pendingQueued: number
 }
 
+export interface DownloadInventory {
+  items: number
+  files: number
+  freeItems: number
+  freeFiles: number
+}
+
 /** 全文件列表行（更新与下载页，qBittorrent 风格） */
 export interface FileListRow {
   downloadableId: number
@@ -372,6 +379,7 @@ export interface FileListRow {
   inQueue: boolean
   /** 是否正在下载 */
   active: boolean
+  progress: { done: number; total: number } | null
   /** 最近一次下载是否失败（基于 download_records 最新一条） */
   failed: boolean
   lastError: string | null

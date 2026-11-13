@@ -30,18 +30,21 @@ it('honors the five-second minimum and persists forced close', async () => {
 it('backs up pre-upgrade bytes and migrates once', async () => {
   const { db, file, wasm } = await open()
   db.exec('ALTER TABLE metadata_snapshots DROP COLUMN snapshot_file')
+  db.exec('ALTER TABLE downloadables DROP COLUMN queued_source')
   db.exec('DELETE FROM schema_migrations WHERE version >= 12'); db.close()
   const original = readFileSync(file)
   const reopen = new Db(file, wasm); await reopen.open()
   expect(readFileSync(file + '.backup-1')).toEqual(original)
   expect(reopen.all('SELECT * FROM schema_migrations WHERE version = 12')).toHaveLength(1)
+  expect(reopen.all('SELECT * FROM schema_migrations WHERE version = 14')).toHaveLength(1)
   reopen.close()
 })
 it('scopes existing video keys to their product and preserves downloaded files on upgrade', async () => {
   const { db, file, wasm } = await open()
   db.run(`INSERT INTO item_videos (key, item_id, platform, video_id, url, embed_url, local_path, status)
     VALUES ('youtube:Example', 7, 'youtube', 'Example', 'watch', 'embed', 'items/7/videos/Example.mp4', 'downloaded')`)
-  db.run('DELETE FROM schema_migrations WHERE version = 13')
+  db.exec('ALTER TABLE downloadables DROP COLUMN queued_source')
+  db.run('DELETE FROM schema_migrations WHERE version >= 13')
   db.close()
 
   const reopened = new Db(file, wasm)

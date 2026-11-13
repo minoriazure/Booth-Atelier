@@ -4,7 +4,7 @@ import initSqlJs, { Database } from 'sql.js'
 import { createLogger } from '../util/log'
 
 const log = createLogger('db')
-const SCHEMA_VERSION = 13
+const SCHEMA_VERSION = 14
 
 /**
  * SQLite (sql.js / WASM) 封装。
@@ -167,6 +167,12 @@ export class Db {
       this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (13, datetime('now'))`)
       this.markDirty()
       log.info('migrations applied: 013_item_video_keys')
+    }
+    if (Number(version) < 14) {
+      this.db.run('ALTER TABLE downloadables ADD COLUMN queued_source TEXT')
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (14, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 014_queued_source')
     }
   }
 

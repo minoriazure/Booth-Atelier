@@ -10,6 +10,7 @@ import type {
   DownloadProgressEvent,
   DownloadDoneEvent,
   DownloadSource,
+  DownloadInventory,
   FileListRow,
   DownloadStats,
   HistoryDeleteTarget,
@@ -93,6 +94,8 @@ export interface BoothAPI {
     enqueueItem(itemId: number, source: DownloadSource): Promise<number>
     /** 开始全部：把待下载全部入队并立即开始（不动已完成/失败），返回队列统计 */
     startAll(source: DownloadSource): Promise<DownloadStats>
+    redownloadAll(): Promise<number>
+    redownloadItem(itemId: number): Promise<number>
     /** @deprecated 语义同 startAll */
     enqueueAll(source: DownloadSource): Promise<DownloadStats>
     cancel(downloadableId: number): Promise<boolean>
@@ -101,6 +104,7 @@ export interface BoothAPI {
     stats(): Promise<DownloadStats>
     /** 全文件列表（DB 状态 + 队列/活动运行时合并） */
     list(): Promise<FileListRow[]>
+    inventory(): Promise<DownloadInventory>
     /** 用户全局暂停（保留队列，中断任务恢复后继续） */
     pauseAll(): Promise<DownloadStats>
     resumeAll(): Promise<DownloadStats>
@@ -231,11 +235,14 @@ const api: BoothAPI = {
     enqueue: (ids, source) => ipcRenderer.invoke('downloads:enqueue', ids, source),
     enqueueItem: (itemId, source) => ipcRenderer.invoke('downloads:enqueueItem', itemId, source),
     startAll: (source) => ipcRenderer.invoke('downloads:startAll', source),
+    redownloadAll: () => ipcRenderer.invoke('downloads:redownloadAll'),
+    redownloadItem: (itemId) => ipcRenderer.invoke('downloads:redownloadItem', itemId),
     enqueueAll: (source) => ipcRenderer.invoke('downloads:startAll', source),
     cancel: (id) => ipcRenderer.invoke('downloads:cancel', id),
     downloadNow: (id) => ipcRenderer.invoke('downloads:downloadNow', id),
     stats: () => ipcRenderer.invoke('downloads:stats'),
     list: () => ipcRenderer.invoke('downloads:list'),
+    inventory: () => ipcRenderer.invoke('downloads:inventory'),
     pauseAll: () => ipcRenderer.invoke('downloads:pauseAll'),
     resumeAll: () => ipcRenderer.invoke('downloads:resumeAll'),
     retryFailed: () => ipcRenderer.invoke('downloads:retryFailed'),

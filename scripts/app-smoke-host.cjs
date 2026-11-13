@@ -19,10 +19,14 @@ app.on('browser-window-created', (_event, win) => {
       const result = await win.webContents.executeJavaScript(`(async () => {
         const settings = await window.boothAPI.settings.get();
         if (!settings.downloadRoot) throw new Error('trusted IPC failed');
+        if (await window.boothAPI.downloads.redownloadAll() !== 0) throw new Error('empty bulk redownload failed');
+        if (await window.boothAPI.downloads.redownloadItem(1) !== 0) throw new Error('empty product redownload failed');
+        const inventory = await window.boothAPI.downloads.inventory();
+        if (Object.values(inventory).some((value) => value !== 0)) throw new Error('empty download inventory failed');
         let rejected = false;
         try { await window.boothAPI.settings.set({downloadRootMissing:false}) } catch { rejected = true }
         if (!rejected) throw new Error('internal settings were writable');
-        return {passed:['application startup','trusted IPC','settings boundary']};
+        return {passed:['application startup','trusted IPC','bulk redownload IPC','settings boundary']};
       })()`)
       console.log(JSON.stringify(result))
       const response = await net.fetch(`image-cache://local/${encodeURIComponent(media)}`, { headers: { Range: 'bytes=-3' } })

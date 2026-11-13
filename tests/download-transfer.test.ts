@@ -2,6 +2,7 @@ import { it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs'
 import { join, resolve } from 'path'
 import { tmpdir } from 'os'
+import { createHash } from 'crypto'
 import { Db } from '../src/main/db/database'
 import { LibraryRepo } from '../src/main/db/repos'
 import { Paths } from '../src/main/util/paths'
@@ -14,6 +15,7 @@ import { preparePartial } from '../src/main/services/downloadResume'
 vi.mock('../src/main/booth/systemFetch', () => ({ systemFetch: vi.fn() }))
 vi.mock('../src/main/util/log', () => ({ createLogger: () => ({ info() {}, warn() {}, error() {} }), describeLink: () => 'test' }))
 let dir: string, db: Db, paths: Paths, repo: LibraryRepo, manager: DownloadManager
+const checksum = (value: string) => createHash('sha256').update(value).digest('hex')
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'booth-transfer-'))
   db = new Db(join(dir, 'test.db'), resolve('node_modules/sql.js/dist/sql-wasm.wasm')); await db.open()
@@ -70,4 +72,66 @@ it('does not replace the current file when cancelled after receiving bytes', asy
   })))
   await expect(transfer(controller.signal)).rejects.toThrow('已取消')
   expect(readFileSync(paths.currentFilePath(1, 'asset.bin'), 'utf8')).toBe('old')
+})
+
+it('restores a forced bulk download and updates the checksum even with the same remote fingerprint', async () => {
+  const file = paths.currentFilePath(1, 'asset.bin')
+  writeFileSync(file, 'oldold')
+  repo.markDownloaded(1, file, 6, checksum('oldold'))
+  repo.updateFingerprint(1, { etag: 'version', size: 6, lastModified: null, filename: 'asset.bin' })
+  repo.ensureAdhoc({ itemId: 2, downloadableId: 2, filename: 'missing.bin', variationId: null })
+  repo.setStatus(2, 'missing')
+  manager.pauseAll()
+  manager.enqueue(1, 'bulk')
+  expect(manager.redownloadAll()).toBe(1)
+  expect(repo.listQueuedDownloads()).toMatchObject([{ downloadableId: 1, source: 'manual' }])
+  expect(repo.localChecksum(1)).toBe(checksum('oldold'))
+  manager.dispose()
+
+  const deeplink = {
+    resolve: async () => ({ dlurl: 'https://s.booth.pm/fake', filename: 'asset.bin' }),
+    probe: async () => ({ etag: 'version', size: 6, lastModified: null })
+  }
+  db.close()
+  db = new Db(join(dir, 'test.db'), resolve('node_modules/sql.js/dist/sql-wasm.wasm'))
+  await db.open()
+  repo = new LibraryRepo(db, paths)
+  expect(repo.listQueuedDownloads()).toMatchObject([{ downloadableId: 1, source: 'manual' }])
+  manager = new DownloadManager(deeplink as unknown as DeeplinkClient, {} as HttpClient, repo, new HistoryManager(repo, paths), paths)
+  seed()
+  vi.mocked(systemFetch).mockResolvedValue(new Response('def', { status: 206, headers: { 'content-range': 'bytes 3-5/6' } }))
+  expect(manager.restoreQueue()).toBe(1)
+  await vi.waitFor(() => expect(manager.stats.active).toBe(0))
+  expect(manager.listFiles().find((row) => row.downloadableId === 1)?.lastError).toBeNull()
+  expect(repo.localChecksum(1)).toBe(checksum('abcdef'))
+  expect(repo.listQueuedIds()).toEqual([])
+  expect(readFileSync(file, 'utf8')).toBe('abcdef')
+  expect(vi.mocked(systemFetch)).toHaveBeenCalledTimes(1)
+})
+
+it('keeps the current file and checksum when a bulk redownload fails', async () => {
+  const file = paths.currentFilePath(1, 'asset.bin')
+  writeFileSync(file, 'oldold')
+  repo.markDownloaded(1, file, 6, checksum('oldold'))
+  vi.mocked(systemFetch).mockResolvedValue(new Response('short'))
+  expect(manager.redownloadAll()).toBe(1)
+  await vi.waitFor(() => expect(manager.stats.active).toBe(0))
+  expect(repo.localChecksum(1)).toBe(checksum('oldold'))
+  expect(readFileSync(file, 'utf8')).toBe('oldold')
+  expect(manager.listFiles()[0].failed).toBe(true)
+})
+
+it('forces all eligible files for one product only', async () => {
+  repo.ensureAdhoc({ itemId: 1, downloadableId: 2, filename: 'second.bin', variationId: null })
+  repo.ensureAdhoc({ itemId: 1, downloadableId: 3, filename: 'missing.bin', variationId: null })
+  repo.ensureAdhoc({ itemId: 2, downloadableId: 4, filename: 'other.bin', variationId: null })
+  repo.setStatus(1, 'downloaded')
+  repo.setStatus(3, 'missing')
+  vi.mocked(systemFetch).mockImplementation(async () => new Response(null, { status: 404 }))
+  expect(manager.redownloadAll(1)).toBe(2)
+  expect(repo.listQueuedDownloads()).toMatchObject([
+    { downloadableId: 1, source: 'manual' },
+    { downloadableId: 2, source: 'manual' }
+  ])
+  await vi.waitFor(() => expect(manager.stats.active).toBe(0))
 })

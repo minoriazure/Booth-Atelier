@@ -262,6 +262,7 @@ it('cleans a description record when its known backup is already missing', () =>
 it('migrates a legacy database and persists synchronized deletion across reopen', async () => {
   const id = legacySnapshot('legacy migration', 1)
   db.exec('ALTER TABLE metadata_snapshots DROP COLUMN snapshot_file')
+  db.exec('ALTER TABLE downloadables DROP COLUMN queued_source')
   db.exec('DELETE FROM schema_migrations WHERE version >= 12')
   db.close()
   db = new Db(join(dir, 'test.db'), resolve('node_modules/sql.js/dist/sql-wasm.wasm'))
