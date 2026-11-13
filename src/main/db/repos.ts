@@ -9,7 +9,8 @@ import type {
   ItemSummary,
   SnapshotEntry,
   TagInfo,
-  TagRef
+  TagRef,
+  VideoReference
 } from '../../shared/types'
 import { TAG_LIMITS } from '../../shared/types'
 
@@ -933,18 +934,18 @@ export class LibraryRepo {
 
   // ── 描述内嵌视频 ──
 
-  upsertVideos(rows: Array<{ key: string; itemId: number; platform: string; videoId: string; url: string; embedUrl: string }>): void {
-    for (const r of rows) {
-      const existing = this.db.get('SELECT key FROM item_videos WHERE key = ?', [r.key])
-      if (!existing) {
+  upsertVideos(itemId: number, videos: VideoReference[]): void {
+    if (!videos.length) return
+    this.db.transaction(() => {
+      for (const video of videos) {
         this.db.run(
-          `INSERT INTO item_videos (key, item_id, platform, video_id, url, embed_url, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'remote', datetime('now'))`,
-          [r.key, r.itemId, r.platform, r.videoId, r.url, r.embedUrl]
+          `INSERT INTO item_videos (key, item_id, platform, video_id, url, embed_url, status, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'remote', datetime('now'))
+           ON CONFLICT(key) DO UPDATE SET url = excluded.url, embed_url = excluded.embed_url, updated_at = excluded.updated_at`,
+          [`${itemId}:${video.key}`, itemId, video.platform, video.videoId, video.url, video.embedUrl]
         )
-      } else {
-        this.db.run(`UPDATE item_videos SET url = ?, embed_url = ?, updated_at = datetime('now') WHERE key = ?`, [r.url, r.embedUrl, r.key])
       }
-    }
+    })
   }
 
   listVideosByItem(itemId: number): Array<{ key: string; platform: string; videoId: string; url: string; embedUrl: string; localPath: string | null; status: string }> {

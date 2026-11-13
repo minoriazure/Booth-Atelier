@@ -775,17 +775,17 @@ export default function ItemDetailPage({
     }
   }
 
-  /** 描述 HTML：选中历史版本时渲染快照（链接形式视频），否则渲染当前描述（商品视频由独立区域展示） */
+  /** 描述 HTML：当前描述与历史快照中的内嵌视频均以链接显示 */
   const processedDesc = useMemo(() => {
     if (!item) return ''
     if (snapshot) {
-      return buildBoothDescHtml(snapshot.descriptionHtml, { localImages: snapshot.localImages, videos: null })
+      return buildBoothDescHtml(snapshot.descriptionHtml, { localImages: snapshot.localImages, historical: true })
     }
     const localImages: Record<string, string> = {}
     for (const g of item.localGallery) {
       if (g.previewMediaUrl) localImages[g.url] = g.previewMediaUrl
     }
-    return buildBoothDescHtml(item.descriptionHtml, { localImages, videos: item.videos })
+    return buildBoothDescHtml(item.descriptionHtml, { localImages })
   }, [item, snapshot])
 
   const sideRef = useRef<HTMLElement>(null)

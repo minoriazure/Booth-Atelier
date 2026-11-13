@@ -1,6 +1,6 @@
 import type { LibraryCrawler } from '../booth/libraryCrawler'
 import type { ItemPageParser } from '../booth/itemPageParser'
-import { metadataHashOf, metadataContentChanged, extractVideos } from '../booth/itemPageParser'
+import { metadataHashOf, metadataContentChanged } from '../booth/itemPageParser'
 import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { ImageLocalizer } from './imageLocalizer'
@@ -246,13 +246,7 @@ export class LibrarySyncService {
     // 画廊远程移除标记（仅标记，不删除记录与本地文件）
     this.repo.syncGalleryRemoval(itemId, detail.galleryUrls)
 
-    // 视频登记（描述里内嵌的 iframe/链接）
-    const vids = extractVideos(detail.descriptionHtml)
-    if (vids.length) {
-      this.repo.upsertVideos(
-        vids.map((v) => ({ key: v.key, itemId, platform: v.platform, videoId: v.videoId, url: v.url, embedUrl: v.embedUrl }))
-      )
-    }
+    this.repo.upsertVideos(itemId, detail.videos)
     return changed
   }
 

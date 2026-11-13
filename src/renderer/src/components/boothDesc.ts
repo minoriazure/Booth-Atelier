@@ -1,15 +1,12 @@
-import type { ItemVideo } from '../../../shared/types'
-
-/** 描述渲染选项：localImages 为远程图片 URL → 本地媒体 URL；videos 为 null 时视频以链接形式呈现（历史快照） */
 export interface BoothDescOptions {
   localImages: Record<string, string>
-  videos: ItemVideo[] | null
+  historical?: boolean
 }
 
 /**
  * 把 BOOTH 描述 HTML 转成可渲染的形式（当前描述与历史快照共用）：
  * - 远程图片替换为本地媒体 URL
- * - 视频 iframe：当前说明移除匹配的商品视频，历史快照将视频转为外链
+ * - 视频 iframe：当前说明与历史快照均将嵌入内容转为原始外链
  * - 清理内联事件属性与 script/style
  */
 export function buildBoothDescHtml(html: string, opts: BoothDescOptions): string {
@@ -19,16 +16,7 @@ export function buildBoothDescHtml(html: string, opts: BoothDescOptions): string
     // data-lazy / data-origin 等属性中的实体编码形式
     out = out.split(encodeEntities(remote)).join(local)
   }
-  out = out.replace(/<iframe[^>]*src="([^"]+)"[^>]*>[\s\S]*?<\/iframe>/gi, (m, src: string) => {
-    const decoded = decodeAttr(src)
-    if (!opts.videos) {
-      return `<a class="history-video-link" href="${encodeEntities(decoded)}" target="_blank" rel="noreferrer">▶ 历史视频（在浏览器中打开）</a>`
-    }
-    if (findVideoBySrc(opts.videos, decoded)) return ''
-    // 未知 iframe 保留（如 booth 自家），但加安全限制
-    return m.replace(/src=/, 'sandbox="allow-scripts allow-same-origin allow-popups" src=')
-  })
-  return sanitizeDesc(linkifyText(out))
+  return sanitizeDesc(linkifyText(out), opts.historical ? '历史视频' : '商品视频')
 }
 
 const BARE_URL_RE = /https?:\/\/(?:[^\s<>"'&]|&amp;)+/g
@@ -57,25 +45,12 @@ export function linkifyText(html: string): string {
 }
 
 
-/** 按 src 反查视频 */
-export function findVideoBySrc(videos: ItemVideo[], src: string): ItemVideo | null {
-  for (const v of videos) {
-    if (v.embedUrl === src || v.url === src) return v
-    if (src.includes(v.videoId)) return v
-  }
-  return null
-}
-
-export function decodeAttr(s: string): string {
-  return s.replace(/&amp;/g, '&').replace(/&quot;/g, '"')
-}
-
 export function encodeEntities(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
 }
 
 /** 清理内联脚本与事件属性 */
-export function sanitizeDesc(html: string): string {
+export function sanitizeDesc(html: string, embedLabel?: string): string {
   if (!html) return ''
   const doc = new DOMParser().parseFromString(html, 'text/html')
   const tags = new Set('p div span section article h1 h2 h3 h4 h5 h6 br hr strong b em i u s del small sub sup blockquote pre code ul ol li dl dt dd a img table thead tbody tfoot tr th td figure figcaption iframe'.split(' '))
@@ -88,6 +63,21 @@ export function sanitizeDesc(html: string): string {
     if (!tags.has(tag)) {
       if (discard.has(tag)) el.remove()
       else el.replaceWith(...Array.from(el.childNodes))
+      continue
+    }
+    if (tag === 'iframe' && embedLabel) {
+      const src = el.getAttribute('src')
+      if (src && web(src)) {
+        const link = doc.createElement('a')
+        link.className = 'history-video-link'
+        link.href = src
+        link.target = '_blank'
+        link.rel = 'noreferrer noopener'
+        link.textContent = `▶ ${embedLabel}（在浏览器中打开）`
+        el.replaceWith(link)
+      } else {
+        el.remove()
+      }
       continue
     }
     for (const attr of Array.from(el.attributes)) {

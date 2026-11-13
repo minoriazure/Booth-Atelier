@@ -74,7 +74,7 @@ Object.assign(window, { runRegression: async () => {
   }
   const { default: ItemDetailPage } = await import('../src/renderer/src/pages/ItemDetailPage')
   const videos: ItemVideo[] = Array.from({ length: 12 }, (_, i) => ({
-    key: `youtube:video-${i}`,
+    key: `1:youtube:video-${i}`,
     platform: 'youtube',
     videoId: `video-${i}`,
     url: `https://www.youtube.com/watch?v=video-${i}`,
@@ -97,7 +97,7 @@ Object.assign(window, { runRegression: async () => {
     library: {
       getItem: async () => ({
         ...item, localGallery: [], downloadables: [], videos,
-        descriptionHtml: `<p>Product description</p><iframe src="${videos[0].embedUrl}"></iframe>`
+        descriptionHtml: `<p>Product description</p><iframe src="${videos[0].embedUrl}?si=original&amp;start=5"></iframe>`
       })
     },
     videos: {
@@ -119,6 +119,8 @@ Object.assign(window, { runRegression: async () => {
   assert(strip.compareDocumentPosition(desc) & Node.DOCUMENT_POSITION_FOLLOWING, 'download strip did not precede description')
   assert(desc.compareDocumentPosition(localList) & Node.DOCUMENT_POSITION_FOLLOWING, 'local videos did not follow description')
   assert(!document.querySelector('.video-card-player, .desc-html iframe'), 'description loaded a player before expansion')
+  assert(desc.querySelector('a')?.getAttribute('href') === `${videos[0].embedUrl}?si=original&start=5`,
+    'current description lost the original embedded video URL')
   const activeSlide = () => document.querySelector('.gallery2-slide[aria-hidden="false"]')!
   assert(activeSlide().querySelector<HTMLVideoElement>('video[controls]')?.getAttribute('src')?.endsWith('video-0.mp4') &&
     !activeSlide().querySelector('button'), 'downloaded video did not play inline in the gallery')

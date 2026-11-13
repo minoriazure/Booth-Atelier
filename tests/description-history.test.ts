@@ -8,7 +8,7 @@ import { Paths } from '../src/main/util/paths'
 import { HistoryManager } from '../src/main/services/historyManager'
 import { LibrarySyncService } from '../src/main/services/librarySyncService'
 import type { LibraryCrawler } from '../src/main/booth/libraryCrawler'
-import type { ItemPageParser } from '../src/main/booth/itemPageParser'
+import { parseItemPage, type ItemPageParser } from '../src/main/booth/itemPageParser'
 import type { ImageLocalizer } from '../src/main/services/imageLocalizer'
 import type { ItemDetail } from '../src/shared/types'
 
@@ -32,7 +32,7 @@ beforeEach(async () => {
   paths = new Paths(join(dir, 'data'), join(dir, 'downloads'))
   history = new HistoryManager(repo, paths)
   repo.upsertFromList({ itemId: 1, title: 'Product (Standard)', thumbnailUrl: '', isGift: false, downloadables: [] })
-  detail = { itemId: 1, title: 'Product', descriptionHtml: '<p>Original</p>', ogImageUrl: 'https://example.com/cover.jpg', galleryUrls: [], shopName: null, filenames: [] }
+  detail = { itemId: 1, title: 'Product', descriptionHtml: '<p>Original</p>', ogImageUrl: 'https://example.com/cover.jpg', galleryUrls: [], shopName: null, filenames: [], videos: [] }
   const parser = { fetch: vi.fn(async () => detail) } as unknown as ItemPageParser
   const images = { registerItemImages: vi.fn() } as unknown as ImageLocalizer
   service = new LibrarySyncService({} as LibraryCrawler, parser, repo, history, images)
@@ -45,6 +45,34 @@ afterEach(() => {
 })
 
 describe('description history', () => {
+  it('registers videos from both product sections once per product', async () => {
+    const html = `
+      <div class="primary-image-area">
+        <iframe src='https://www.youtube.com/embed/GalleryOnly?si=share'></iframe>
+        <a href='https://vimeo.com/12345'>Gallery link</a>
+      </div>
+      <section><div class="js-market-item-detail-description">Product</div></section>
+      <div class="my-40">
+        <a href='https://youtu.be/GalleryOnly'>Same video</a>
+        <iframe src='https://www.youtube.com/embed/DescriptionOnly'></iframe>
+      </div>
+      <aside><iframe src='https://www.youtube.com/embed/UnrelatedVideo'></iframe></aside>
+    `
+    detail = parseItemPage(html, 1)
+    await service.refreshItem(1)
+    expect(repo.listVideosByItem(1).map((v) => v.key)).toEqual([
+      '1:youtube:GalleryOnly', '1:youtube:DescriptionOnly', '1:vimeo:12345'
+    ])
+
+    repo.upsertFromList({ itemId: 2, title: 'Second product', thumbnailUrl: '', isGift: false, downloadables: [] })
+    repo.setVideoStatus('1:youtube:GalleryOnly', 'downloaded', 'local.mp4')
+    detail = parseItemPage(html, 2)
+    await service.refreshItem(2)
+    expect(repo.listVideosByItem(2)).toHaveLength(3)
+    expect(repo.listVideosByItem(2)[0]).toMatchObject({ key: '2:youtube:GalleryOnly', status: 'remote', localPath: null })
+    expect(repo.listVideosByItem(1)[0]).toMatchObject({ status: 'downloaded', localPath: 'local.mp4' })
+  })
+
   it('saves the initial version once and appends only the new version across days', async () => {
     await service.refreshItem(1)
     const initial = repo.listSnapshotDates(1)[0]

@@ -4,6 +4,7 @@ import initSqlJs, { Database } from 'sql.js'
 import { createLogger } from '../util/log'
 
 const log = createLogger('db')
+const SCHEMA_VERSION = 13
 
 /**
  * SQLite (sql.js / WASM) 封装。
@@ -43,8 +44,8 @@ export class Db {
     }
     const version = this.db.exec("SELECT name FROM sqlite_master WHERE name = 'schema_migrations'").length
       ? Number(this.db.exec('SELECT MAX(version) FROM schema_migrations')[0]?.values[0]?.[0] ?? 0) : 0
-    if (version > 12) { this.db.close(); throw new Error('数据库来自更新版本，请使用对应新版应用') }
-    if (version < 12 && existsSync(this.filePath)) {
+    if (version > SCHEMA_VERSION) { this.db.close(); throw new Error('数据库来自更新版本，请使用对应新版应用') }
+    if (version < SCHEMA_VERSION && existsSync(this.filePath)) {
       for (let i = 2; i >= 1; i--) {
         const source = this.filePath + `.backup-${i}`
         if (existsSync(source)) copyFileSync(source, this.filePath + `.backup-${i + 1}`)
@@ -52,7 +53,7 @@ export class Db {
       copyFileSync(this.filePath, this.filePath + '.backup-1')
     }
     try {
-      if (version < 12) {
+      if (version < SCHEMA_VERSION) {
         this.transaction(() => this.migrate())
         this.flush(true)
       }
@@ -160,6 +161,12 @@ export class Db {
       this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (12, datetime('now'))`)
       this.markDirty()
       log.info('migrations applied: 012_snapshot_file')
+    }
+    if (Number(version) < 13) {
+      this.db.run("UPDATE item_videos SET key = item_id || ':' || platform || ':' || video_id")
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (13, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 013_item_video_keys')
     }
   }
 

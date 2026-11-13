@@ -398,7 +398,7 @@ function DescDetail({ snapshotId, busy, onDelete, onClose }: { snapshotId: numbe
   }, [itemId])
 
   const html = useMemo(
-    () => (snap ? buildBoothDescHtml(snap.descriptionHtml, { localImages: snap.localImages, videos: null }) : ''),
+    () => (snap ? buildBoothDescHtml(snap.descriptionHtml, { localImages: snap.localImages, historical: true }) : ''),
     [snap]
   )
 

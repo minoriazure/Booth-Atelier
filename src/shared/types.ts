@@ -50,6 +50,7 @@ export interface ItemDetail {
   galleryUrls: string[]
   shopName: string | null
   filenames: string[]
+  videos: VideoReference[]
 }
 
 export type DownloadSource = 'initial' | 'bulk' | 'manual' | 'update' | 'deeplink'
@@ -250,14 +251,18 @@ export interface ProxyTestResult {
 /** 描述中的内嵌视频 */
 export type VideoPlatform = 'youtube' | 'nicovideo' | 'vimeo' | 'other'
 
-export interface ItemVideo {
+export interface VideoReference {
   /** platform:videoId */
   key: string
   platform: VideoPlatform
   videoId: string
-  /** 原始页面 URL（yt-dlp 输入） */
   url: string
   embedUrl: string
+}
+
+export interface ItemVideo extends VideoReference {
+  /** itemId:platform:videoId */
+  key: string
   /** 本地已下载的文件绝对路径 */
   localPath: string | null
   /** 视频封面缩略图（与视频同目录 {base}-thumb.jpg）的渲染层地址；缺失为 null */

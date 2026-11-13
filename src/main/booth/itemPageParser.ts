@@ -2,16 +2,7 @@ import * as cheerio from 'cheerio'
 import { createHash } from 'crypto'
 import { BoothError } from './errors'
 import { sniffAuthFailure, type HttpClient } from './httpClient'
-import type { ItemDetail, VideoPlatform } from '../../shared/types'
-
-/** 描述中提取的视频 */
-export interface ExtractedVideo {
-  key: string
-  platform: VideoPlatform
-  videoId: string
-  url: string
-  embedUrl: string
-}
+import type { ItemDetail, VideoReference } from '../../shared/types'
 
 /**
  * 商品详情页（/zh-cn/items/{id}）解析。
@@ -85,10 +76,8 @@ export function parseItemPage(html: string, itemId: number): ItemDetail {
   const descImgMatches = descriptionHtml.match(/https:\/\/booth\.pximg\.net\/[^"'\s)>]+/g) || []
   for (const u of descImgMatches) pushUrl(u.split('&quot;')[0])
 
-  // ── 描述中的内嵌视频 ──
-  const videos = extractVideos(descriptionHtml)
-
-  // ── 视频缩略图若有（youtube img），不额外处理，用平台自带 ──
+  const gallerySections = $('.primary-image-area').map((_, el) => $(el).html() ?? '').get()
+  const videos = extractVideos(descriptionHtml, ...gallerySections)
 
   const shopName =
     $('meta[name="author"]').attr('content')?.trim() ||
@@ -113,42 +102,33 @@ export function parseItemPage(html: string, itemId: number): ItemDetail {
     ogImageUrl: ogImage,
     galleryUrls,
     shopName,
-    filenames
+    filenames,
+    videos
   }
 }
 
-/** 从描述 HTML 提取内嵌视频（iframe/链接） */
-export function extractVideos(descriptionHtml: string): ExtractedVideo[] {
-  const out: ExtractedVideo[] = []
-  const seen = new Set<string>()
-  const add = (v: ExtractedVideo): void => {
-    if (seen.has(v.key)) return
-    seen.add(v.key)
-    out.push(v)
+/** 从简介及画廊 HTML 提取视频，保留简介中的既有顺序。 */
+function extractVideos(...sections: string[]): VideoReference[] {
+  const videos = new Map<string, VideoReference>()
+  for (const html of sections) {
+    const $ = cheerio.load(html)
+    for (const el of $('iframe[src], a[href]').toArray()) {
+      const url = $(el).attr(el.tagName === 'iframe' ? 'src' : 'href')
+      const video = url && parseVideoUrl(url)
+      if (video) videos.set(video.key, video)
+    }
   }
-
-  // iframe src 与超链接 href 都扫
-  const sources: string[] = []
-  const iframeRe = /<iframe[^>]+src="([^"]+)"/gi
-  let m: RegExpExecArray | null
-  while ((m = iframeRe.exec(descriptionHtml))) sources.push(decodeEntities(m[1]))
-  const linkRe = /href="(https?:\/\/[^"]+)"/gi
-  while ((m = linkRe.exec(descriptionHtml))) sources.push(decodeEntities(m[1]))
-
-  for (const src of sources) {
-    const v = parseVideoUrl(src)
-    if (v) add(v)
-  }
-  return out
+  return [...videos.values()]
 }
 
-export function parseVideoUrl(rawUrl: string): ExtractedVideo | null {
+export function parseVideoUrl(rawUrl: string): VideoReference | null {
   let u: URL
   try {
     u = new URL(rawUrl)
   } catch {
     return null
   }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
   const host = u.hostname.replace(/^www\./, '')
 
   // YouTube
@@ -171,7 +151,7 @@ export function parseVideoUrl(rawUrl: string): ExtractedVideo | null {
   }
 
   // NicoNico
-  if (host.endsWith('nicovideo.jp') || host === 'nico.ms') {
+  if ((host === 'nicovideo.jp' || host.endsWith('.nicovideo.jp')) || host === 'nico.ms') {
     const sm = /\/watch\/(sm\d+)/.exec(u.pathname) || (host === 'nico.ms' ? /^\/(\w+)$/.exec(u.pathname) : null)
     if (sm) {
       const vid = sm[1]
@@ -201,15 +181,6 @@ export function parseVideoUrl(rawUrl: string): ExtractedVideo | null {
   }
 
   return null
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
 }
 
 /** 计算元数据哈希（检测作者修改简介/宣传图/标题/视频） */

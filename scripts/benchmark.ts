@@ -22,7 +22,7 @@ async function main(): Promise<void> {
       const db = new Db(join(dir, `${size}.db`), resolve('node_modules/sql.js/dist/sql-wasm.wasm'))
       await db.open()
       const repo = new LibraryRepo(db)
-      const detail = (id: number) => ({ itemId: id, title: `Asset ${id} needle`, shopName: `Shop ${id % 100}`, descriptionHtml: '<p>benchmark</p>', ogImageUrl: null, galleryUrls: [], filenames: [] })
+      const detail = (id: number) => ({ itemId: id, title: `Asset ${id} needle`, shopName: `Shop ${id % 100}`, descriptionHtml: '<p>benchmark</p>', ogImageUrl: null, galleryUrls: [], filenames: [], videos: [] })
       const loop = monitorEventLoopDelay({ resolution: 10 }); loop.enable()
       await new Promise((done) => setTimeout(done, 20))
       const start = performance.now()
