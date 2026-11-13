@@ -138,6 +138,7 @@ export interface CheckProgressEvent {
 export interface CheckSummary {
   libraryChecked: number
   libraryChanged: number
+  library?: LibrarySyncStats
   filesChecked: number
   filesUpdated: number
   downloaded: number
@@ -147,6 +148,35 @@ export interface CheckSummary {
 /** 单商品刷新结果（只更新商品页数据） */
 export interface RefreshItemResult {
   changed: boolean
+  titleChanged: boolean
+  coverChanged: boolean
+  galleryChanged: boolean
+  galleryAdded: number
+  galleryRemoved: number
+  descriptionChanged: boolean
+  snapshotSaved: boolean
+  imagesPending: number
+  notFound?: boolean
+}
+
+export interface LibrarySyncStats {
+  added: number
+  linksFetched: number
+  linksAdded: number
+  linksChanged: number
+  linksRemoved: number
+  newItemLinks: number
+  coversChanged: number
+  galleriesChanged: number
+  descriptionsChanged: number
+  detailsChecked: number
+  detailsTotal: number
+  listFailures: number
+  detailFailures: number
+  notFound: number
+  imagesPending: number
+  issues: Array<{ itemId?: number; source: string; reason: string }>
+  changes: Array<{ itemId: number; label: string }>
 }
 
 /** 单商品本地删除结果 */

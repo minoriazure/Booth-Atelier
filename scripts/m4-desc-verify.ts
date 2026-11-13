@@ -12,7 +12,7 @@ async function main() {
   try {
     // 1) 全量强制同步（新解析器抓完整描述）
     console.log('=== 1. 强制同步（完整描述 + 视频 + 图片登记） ===')
-    const s = await ctx.sync.sync(true)
+    const s = await ctx.sync.sync()
     console.log('sync:', JSON.stringify(s))
 
     // 2) 描述完整性

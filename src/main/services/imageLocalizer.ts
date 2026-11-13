@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync, statSync, writeFileSync, renameSync } from 'fs'
+import { existsSync, mkdirSync, statSync, writeFileSync, renameSync, readFileSync, unlinkSync } from 'fs'
 import { join, extname, basename } from 'path'
 import { generateDerivatives, fileOk } from './imageDerivatives'
 export { THUMB_WIDTH, PREVIEW_LONG_EDGE } from './imageDerivatives'
@@ -7,9 +7,14 @@ import type { ImageProgress, DerivativeProgress, ReconcileProgress, ReconcileRes
 import type { HttpClient } from '../booth/httpClient'
 import type { LibraryRepo, ImageRef, DerivStatus } from '../db/repos'
 import type { Paths } from '../util/paths'
+import { sanitizeFilename, withSuffix } from '../util/filenames'
 import { createLogger } from '../util/log'
 
 const log = createLogger('imageLocalizer')
+
+function isCover(kind: string): boolean {
+  return kind === 'thumb' || kind === 'og'
+}
 
 /** 派生图生成任务：src 原图 → dest 缩略图 / preview 预览图 */
 interface DerivativeJob {
@@ -93,20 +98,104 @@ export class ImageLocalizer {
   ) {}
 
   /** 登记商品的全部图片（thumb/og/gallery/desc），新 URL 入队后台下载 */
-  registerItemImages(itemId: number, urls: Array<{ url: string; kind: string }>): void {
-    const rows = urls.map((u) => ({
-      url: u.url,
-      itemId,
-      kind: u.kind,
-      filename: imageFilename(u.url)
-    }))
-    this.repo.upsertImages(rows)
-    for (const r of rows) {
-      // 仅未完成的入队（内存队列去重 + DB 状态判断）
-      if (this.queue.some((q) => q.url === r.url) || this.activeUrls.has(r.url)) continue
-      const img = this.repo.getImage(r.url)
-      const alreadyDone = img && img.status === 'done' && existsSync(this.localPath(r.itemId, r.filename))
-      if (!alreadyDone) this.enqueue(r, 0)
+  registerItemImages(itemId: number, urls: Array<{ url: string; kind: string }>): number {
+    let pending = 0
+    for (const { url, kind } of urls) {
+      let image = this.repo.getImage(url)
+      if (!image) {
+        const ref = { url, itemId, kind, filename: this.availableFilename(itemId, url, kind) }
+        this.repo.upsertImages([ref])
+        image = { ...ref, status: 'pending' }
+      }
+      if (fileOk(this.localPath(image.itemId, image.filename))) continue
+      pending++
+      if (!this.queue.some((q) => q.url === url) && !this.activeUrls.has(url)) this.enqueue(image, 0)
+    }
+    return pending
+  }
+
+  private availableFilename(itemId: number, url: string, kind: string, previous?: string): string {
+    const preferred = imageFilename(url, kind)
+    let name = preferred
+    for (let n = 2; ; n++) {
+      const stem = isCover(kind) ? null : basename(name, extname(name))
+      const occupied = this.repo.imageFilenameInUse(itemId, name, stem, url)
+      const dest = this.localPath(itemId, name)
+      const source = previous && this.localPath(itemId, previous)
+      const originalAvailable = !existsSync(dest) || (source && fileOk(source) && sameFile(source, dest))
+      const variantsAvailable = isCover(kind) || [
+        [this.thumbPath(itemId, name), previous && this.thumbPath(itemId, previous)],
+        [this.previewPath(itemId, name), previous && this.previewPath(itemId, previous)]
+      ].every(([next, old]) => !next || !existsSync(next) || (!!old && fileOk(old) && sameFile(old, next)))
+      if (!occupied && originalAvailable && variantsAvailable) break
+      name = withSuffix(preferred, n)
+    }
+    if (name !== preferred) log.warn(`image name collision: #${itemId} ${url} → ${name}`)
+    return name
+  }
+
+  /** Copy first so the old DB mapping stays readable until the new mapping is on disk. */
+  async migrateLegacyNames(): Promise<void> {
+    let cursor = 0
+    let migrated = 0
+    while (!this.disposed) {
+      const rows = this.repo.listImagePage(cursor, 100)
+      if (!rows.length) break
+      cursor = rows[rows.length - 1].rid
+      const updated: ImageRef[] = []
+      for (const r of rows) {
+        if (!/^[a-f0-9]{16}\./.test(r.filename) || r.filename !== legacyImageFilename(r.url) || this.activeUrls.has(r.url)
+          || this.queue.some((q) => q.url === r.url) || this.thumbWanted.has(this.thumbPath(r.itemId, r.filename))) continue
+        try {
+          const filename = this.availableFilename(r.itemId, r.url, r.kind, r.filename)
+          const oldOriginal = this.localPath(r.itemId, r.filename)
+          const nextOriginal = this.localPath(r.itemId, filename)
+          if (fileOk(oldOriginal)) copyImage(oldOriginal, nextOriginal)
+          const variants = [
+            [this.thumbPath(r.itemId, r.filename), this.thumbPath(r.itemId, filename)],
+            [this.previewPath(r.itemId, r.filename), this.previewPath(r.itemId, filename)]
+          ]
+          for (const [oldPath, nextPath] of variants) {
+            if (!isCover(r.kind) && fileOk(oldOriginal) && fileOk(oldPath)) copyImage(oldPath, nextPath)
+          }
+          this.repo.transaction(() => this.repo.setImageFilename(r, filename))
+          updated.push(r)
+          migrated++
+        } catch (e) {
+          log.warn(`image migration failed: #${r.itemId} ${r.url}`, e instanceof Error ? e.message : e)
+        }
+      }
+      if (updated.length) {
+        this.repo.flushImageNames()
+        for (const r of updated) this.onImageDone?.(r.itemId, r.url)
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    if (!this.disposed) await this.cleanLegacyNames()
+    if (migrated) log.info(`migrated image filenames: ${migrated}`)
+  }
+
+  private async cleanLegacyNames(): Promise<void> {
+    let cursor = 0
+    while (!this.disposed) {
+      const page = this.repo.listImageNameCleanup(cursor)
+      if (!page.length) break
+      cursor = page[page.length - 1].rid
+      for (const r of page) {
+        try {
+          for (const path of [
+            this.localPath(r.itemId, r.filename),
+            this.thumbPath(r.itemId, r.filename),
+            this.previewPath(r.itemId, r.filename)
+          ]) {
+            if (existsSync(path)) unlinkSync(path)
+          }
+          this.repo.finishImageNameCleanup(r.rid)
+        } catch (e) {
+          log.warn('legacy image cleanup failed:', r.filename, e instanceof Error ? e.message : e)
+        }
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve))
     }
   }
 
@@ -152,7 +241,7 @@ export class ImageLocalizer {
   }
 
   private pump(): void {
-    if (this.paused) return
+    if (this.paused || this.disposed) return
     while (this.running < this.maxConcurrent && this.queue.length > 0) {
       const row = this.queue.shift()!
       this.activeUrls.add(row.url)
@@ -166,7 +255,7 @@ export class ImageLocalizer {
         .catch((e) => {
           const n = (this.failCount.get(row.url) ?? 0) + 1
           this.failCount.set(row.url, n)
-          log.warn(`image fail #${n} ${row.itemId}/${row.filename}:`, e instanceof Error ? e.message : e)
+          log.warn(`image fail #${n} ${row.itemId}/${row.filename} ${row.url}:`, e instanceof Error ? e.message : e)
           if (n < 3) {
             // 指数退避重入队（2s/8s）——重试不再计 total
             const delay = Math.min(2000 * 2 ** (n - 1), 16000)
@@ -246,7 +335,10 @@ export class ImageLocalizer {
 
   private async downloadOne(row: { url: string; itemId: number; kind: string; filename: string }): Promise<void> {
     const dest = this.localPath(row.itemId, row.filename)
-    if (existsSync(dest) && statSync(dest).size > 0) return
+    if (fileOk(dest)) {
+      this.bufferStatus(row.url, 'done', statSync(dest).size)
+      return
+    }
     mkdirSync(join(dest, '..'), { recursive: true })
     // 全尺寸原图可能 >30s：图片专用 120s 超时
     const res = await this.http.request(row.url, 'GET', {
@@ -293,7 +385,8 @@ export class ImageLocalizer {
     const img = this.repo.getImage(url)
     if (!img) return null
     const orig = this.localPath(img.itemId, img.filename)
-    if (!existsSync(orig) || statSync(orig).size === 0) return null
+    if (!fileOk(orig)) return null
+    if (isCover(img.kind)) return orig
     const thumb = this.thumbPath(img.itemId, img.filename)
     if (existsSync(thumb) && statSync(thumb).size > 0) return thumb
     // 不在详情页打开时触发生成（会瞬间压垮主线程）——
@@ -308,7 +401,8 @@ export class ImageLocalizer {
     const img = this.repo.getImage(url)
     if (!img) return null
     const orig = this.localPath(img.itemId, img.filename)
-    if (!existsSync(orig) || statSync(orig).size === 0) return null
+    if (!fileOk(orig)) return null
+    if (isCover(img.kind)) return orig
     const preview = this.previewPath(img.itemId, img.filename)
     if (existsSync(preview) && statSync(preview).size > 0) return preview
     return orig
@@ -363,7 +457,7 @@ export class ImageLocalizer {
 
   /** 入队派生任务（dest 去重）；atFront 用于可见卡片优先。返回是否真正入队 */
   private addDerivJob(job: DerivativeJob, atFront: boolean): boolean {
-    if (this.disposed || this.thumbWanted.has(job.dest)) return false
+    if (this.disposed || isCover(job.kind) || this.thumbWanted.has(job.dest)) return false
     this.thumbWanted.add(job.dest)
     if (atFront) this.thumbQueue.unshift(job)
     else this.thumbQueue.push(job)
@@ -487,7 +581,7 @@ export class ImageLocalizer {
    * 分页核对已完成行的原图与派生图文件是否与 DB 状态一致；原图缺失则重新下载，
    * 派生图缺失则标记为未就绪并重新入队。按页让出事件循环，根目录不存在时跳过。
    */
-  async reconcileImages(scope?: { itemId: number }): Promise<ReconcileResult> {
+  async reconcileImages(scope?: { itemId: number; skipCovers?: boolean }): Promise<ReconcileResult> {
     const result: ReconcileResult = { checked: 0, redownload: 0, derivMarked: 0, derivMissing: 0 }
     if (this.disposed) return result
     if (!existsSync(this.paths.dataRootPath)) {
@@ -504,6 +598,7 @@ export class ImageLocalizer {
       if (page.length === 0) break
       afterRowid = page[page.length - 1].rid
       for (const r of page) {
+        if (scope?.skipCovers && isCover(r.kind)) continue
         result.checked++
         const orig = this.localPath(r.itemId, r.filename)
         if (!fileOk(orig)) {
@@ -515,6 +610,7 @@ export class ImageLocalizer {
           log.warn(`original missing, re-download: #${r.itemId} ${r.filename}`)
           continue
         }
+        if (isCover(r.kind)) continue
         const thumbStatus: DerivStatus = fileOk(this.thumbPath(r.itemId, r.filename)) ? 'ok' : 'missing'
         const previewStatus: DerivStatus = fileOk(this.previewPath(r.itemId, r.filename)) ? 'ok' : 'missing'
         if (thumbStatus === 'missing' || previewStatus === 'missing') result.derivMissing++
@@ -545,8 +641,8 @@ export class ImageLocalizer {
    * 商品详情页单品检查：只核对该商品的已完成记录（纯本地 stat），
    * 原图缺失自动重下，派生图缺失标记后优先补齐。
    */
-  async checkItem(itemId: number): Promise<ReconcileResult> {
-    const r = await this.reconcileImages({ itemId })
+  async checkItem(itemId: number, skipCovers = false): Promise<ReconcileResult> {
+    const r = await this.reconcileImages({ itemId, skipCovers })
     if (r.derivMissing > 0 || r.redownload > 0) {
       this.prioritizeItem(itemId)
     }
@@ -606,14 +702,15 @@ export class ImageLocalizer {
     const img = this.repo.getImage(url)
     if (!img) return null
     const p = this.localPath(img.itemId, img.filename)
-    return existsSync(p) && statSync(p).size > 0 ? p : null
+    return fileOk(p) ? p : null
   }
 
-  /** item 已知场景的解析（DB 行还没写时按 URL 哈希探测） */
+  /** 优先使用数据库映射，兼容尚未迁移的旧缓存。 */
   resolveLocalFor(itemId: number, url: string): string | null {
-    const direct = this.localPath(itemId, imageFilename(url))
-    if (existsSync(direct) && statSync(direct).size > 0) return direct
-    return this.resolveLocal(url)
+    const registered = this.resolveLocal(url)
+    if (registered) return registered
+    const direct = this.localPath(itemId, legacyImageFilename(url))
+    return fileOk(direct) ? direct : null
   }
 
   get stats(): { queued: number; active: number } {
@@ -694,7 +791,7 @@ export class ImageLocalizer {
 }
 
 /** URL → 本地文件名（哈希 + 原扩展名） */
-export function imageFilename(url: string): string {
+function legacyImageFilename(url: string): string {
   const hash = createHash('sha1').update(url).digest('hex').slice(0, 16)
   let ext = '.jpg'
   try {
@@ -705,4 +802,35 @@ export function imageFilename(url: string): string {
     /* default */
   }
   return `${hash}${ext}`
+}
+
+export function imageFilename(url: string, kind: string): string {
+  let name = 'image.jpg'
+  try {
+    const segment = new URL(url).pathname.split('/').pop()
+    if (segment) name = decodeURIComponent(segment)
+  } catch {
+    // Invalid URL or percent encoding uses a safe default.
+  }
+  name = sanitizeFilename(name.replaceAll('\\', '_'))
+  const suffix = kind === 'thumb' ? '-library' : kind === 'og' ? '-og' : ''
+  const ext = extname(name)
+  return sanitizeFilename(basename(name, ext) + suffix + ext)
+}
+
+function sameFile(a: string, b: string): boolean {
+  return fileOk(b) && statSync(a).size === statSync(b).size && readFileSync(a).equals(readFileSync(b))
+}
+
+function copyImage(source: string, dest: string): void {
+  if (sameFile(source, dest)) return
+  if (existsSync(dest)) throw new Error(`image migration destination already exists: ${dest}`)
+  const temporary = dest + '.migration.tmp'
+  try {
+    writeFileSync(temporary, readFileSync(source), { flush: true })
+    if (!sameFile(source, temporary)) throw new Error(`image copy verification failed: ${dest}`)
+    renameSync(temporary, dest)
+  } finally {
+    if (existsSync(temporary)) unlinkSync(temporary)
+  }
 }

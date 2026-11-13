@@ -89,11 +89,11 @@ export class HistoryManager {
     descriptionHtml: string
     ogImageUrl: string | null
     galleryUrls: string[]
-  }): void {
+  }): boolean {
     const date = input.date ?? localDate()
     // 比较连续版本而非仅同日版本；封面变化也必须保留，画廊变化不单独建快照。
     const last = this.repo.getLatestSnapshot(input.itemId)
-    if (last && !metadataContentChanged(last, input)) return
+    if (last && !metadataContentChanged(last, input)) return false
 
     this.paths.ensureItemDataDirs(input.itemId)
     const id = this.repo.addSnapshot({
@@ -124,6 +124,7 @@ export class HistoryManager {
     } catch (e) {
       log.error('description write failed:', e)
     }
+    return true
   }
 
   /** 旧快照依据原始注释和完整正文认领文件，避免删记录后按日期序号误删其它版本。 */

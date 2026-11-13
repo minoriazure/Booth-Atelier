@@ -85,7 +85,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   handle('library:searchPage', (query: unknown, limit: unknown, after: unknown) => {
     const cursor = z.object({ title: z.string(), itemId: id }).optional().parse(after)
     const result = ctx.repo.searchPage(q.max(500).parse(query), z.number().int().min(1).max(500).parse(limit), cursor)
-    return { ...result, items: result.items.map((r) => ({ ...r, localThumb: r.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolvePreviewLocal(r.thumbnailUrl)) : null })) }
+    return { ...result, items: result.items.map((r) => ({ ...r, localThumb: r.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolveLocal(r.thumbnailUrl)) : null })) }
   })
   handle('history:cancelDelete', () => ctx.history.cancelDeletion())
   ctx.history.onDeleteProgress = (p) => send('event:historyDeleteProgress', p)
@@ -168,18 +168,22 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   ): Array<T & { localThumb: string | null }> =>
     rows.map((r) => ({
       ...r,
-      localThumb: r.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolvePreviewLocal(r.thumbnailUrl)) : null
+      localThumb: r.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolveLocal(r.thumbnailUrl)) : null
     }))
   handle('library:list', (query?: unknown) =>
     withLocalThumbs(typeof query === 'string' && query ? ctx.repo.search(query) : ctx.repo.listSummaries())
   )
   handle('library:search', (query: unknown) => withLocalThumbs(ctx.repo.search(q.parse(query))))
+  handle('library:getCover', (itemId: unknown) => {
+    const cover = ctx.repo.getCover(id.parse(itemId))
+    if (!cover) return null
+    return { thumbnailUrl: cover.url, localThumb: cover.url ? tryMedia(ctx.imageLocalizer.resolveLocal(cover.url)) : null }
+  })
   handle('library:getItem', (itemId: unknown) => {
     const rid = id.parse(itemId)
     const detail = ctx.repo.getItemDetail(rid)
     if (!detail) return null
-    detail.localThumb = detail.thumbnailUrl ? tryMedia(ctx.imageLocalizer.resolvePreviewLocal(detail.thumbnailUrl)) : null
-    const removedUrls = ctx.repo.listRemovedGalleryUrls(rid)
+    const removedUrls = ctx.repo.listRemovedGalleryUrls(rid).filter((url) => url !== detail.ogImageUrl)
     const removedSet = new Set(removedUrls)
     const galleryAll = [...detail.galleryUrls, ...removedUrls.filter((u) => !detail.galleryUrls.includes(u))]
     detail.localGallery = galleryAll.map((u) => ({
@@ -204,10 +208,8 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     }))
     return detail
   })
-  handle('library:sync', async (force?: unknown) => {
-    const summary = await ctx.sync.sync(force === true)
-    send('event:libraryUpdated', summary)
-    return summary
+  handle('library:sync', async () => {
+    return ctx.sync.sync()
   })
   handle('library:refreshItem', async (itemId: unknown) => {
     const rid = id.parse(itemId)
@@ -246,13 +248,16 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   })
 
   // 商品图片：登记 + 后台下载（无需确认）
+  handle('images:enqueueCover', (itemId: unknown) => {
+    const rid = id.parse(itemId)
+    const cover = ctx.repo.getCover(rid)
+    return cover?.url ? ctx.imageLocalizer.registerItemImages(rid, [{ url: cover.url, kind: cover.kind }]) : 0
+  })
   handle('images:enqueueItem', (itemId: unknown) => {
     const rid = id.parse(itemId)
     const detail = ctx.repo.getItemDetail(rid)
     if (!detail) return 0
     const list: Array<{ url: string; kind: string }> = []
-    if (detail.thumbnailUrl) list.push({ url: detail.thumbnailUrl, kind: 'thumb' })
-    if (detail.ogImageUrl) list.push({ url: detail.ogImageUrl, kind: 'og' })
     for (const u of detail.galleryUrls) list.push({ url: u, kind: 'gallery' })
     ctx.imageLocalizer.registerItemImages(rid, list)
     return list.length
@@ -295,7 +300,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   // 商品详情页单品检查：本地核对缺失的原图/派生图，发现缺失即补齐
   handle('images:checkItem', async (itemId: unknown) => {
     const iid = id.parse(itemId)
-    const r = await ctx.imageLocalizer.checkItem(iid)
+    const r = await ctx.imageLocalizer.checkItem(iid, true)
     if (r.redownload > 0 || r.derivMissing > 0) {
       log.info(`item image check #${iid}: checked ${r.checked}, redownload ${r.redownload}, derivative missing ${r.derivMissing}`)
     }

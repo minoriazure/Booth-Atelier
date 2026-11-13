@@ -1,12 +1,13 @@
 import type { LibraryCrawler } from '../booth/libraryCrawler'
 import type { ItemPageParser } from '../booth/itemPageParser'
-import { metadataHashOf, metadataContentChanged } from '../booth/itemPageParser'
+import { metadataHashOf, normalizeHtml } from '../booth/itemPageParser'
 import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { ImageLocalizer } from './imageLocalizer'
 import { existsSync } from 'fs'
 import { basename } from 'path'
-import type { CheckProgressEvent, CheckSummary, ItemDetail } from '../../shared/types'
+import type { CheckProgressEvent, CheckSummary, ItemDetail, LibraryItem, LibrarySyncStats, RefreshItemResult } from '../../shared/types'
+import { librarySummary } from '../../shared/librarySyncSummary'
 import { localDate } from '../util/filenames'
 import { BoothError, isAuthError } from '../booth/errors'
 import { createLogger, describeLink } from '../util/log'
@@ -17,7 +18,7 @@ const log = createLogger('librarySync')
  * 库元数据同步（用户需求 #3 的"库更新"，与文件更新完全独立）：
  * - 抓列表页（购买+赠送）→ upsert items/downloadables，绝不入队任何文件下载
  * - 抓详情页 → 描述/宣传图/标题变化 → 写日期快照（历史备份）
- * - 详情页抓取节流：last_detail_at 超过 7 天 或 metadata 潜在变化才刷新
+ * - 每次同步完整检查库内商品详情；启动间隔由 StartupService 控制
  */
 export class LibrarySyncService {
   private running = false
@@ -29,65 +30,98 @@ export class LibrarySyncService {
     private itemPage: ItemPageParser,
     private repo: LibraryRepo,
     private history: HistoryManager,
-    private images: ImageLocalizer,
-    private opts: { detailStaleDays?: number } = {}
+    private images: ImageLocalizer
   ) {}
 
   get isRunning(): boolean {
     return this.running
   }
 
-  async sync(forceDetail = false): Promise<CheckSummary> {
+  async sync(): Promise<CheckSummary> {
     if (this.running) throw new Error('同步已在进行中')
     this.running = true
-    log.info(`library sync start (forceDetail=${forceDetail})`)
+    log.info('library sync start')
     const summary: CheckSummary = { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
+    const stats: LibrarySyncStats = {
+      added: 0, linksFetched: 0, linksAdded: 0, linksChanged: 0, linksRemoved: 0, newItemLinks: 0,
+      coversChanged: 0, galleriesChanged: 0, descriptionsChanged: 0,
+      detailsChecked: 0, detailsTotal: 0, listFailures: 0, detailFailures: 0, notFound: 0,
+      imagesPending: 0, issues: [], changes: []
+    }
+    summary.library = stats
     try {
       // 1) 列表页
       this.onProgress?.({ phase: 'library', current: 0, total: 0, label: '抓取库列表…' })
-      const seen = new Set<number>()
       const knownIds = new Set(this.dbAllItemIds())
-      /** 商品 → 列表页当前提供的 downloadable 集合（检测消失的旧链接用） */
-      const crawledDl = new Map<number, Set<number>>()
+      const items = new Map<number, LibraryItem>()
       const kinds: Array<'library' | 'gifts'> = ['library', 'gifts']
-      let processed = 0
       for (const kind of kinds) {
-        const items = await this.crawler.crawlKind(kind, (_k, page, count) => {
-          log.info(`[${kind}] page ${page}: ${count} items`)
-        })
-        for (const it of items) {
-          if (++processed % 100 === 0) await new Promise<void>((done) => setImmediate(done))
-          seen.add(it.itemId)
-          if (!knownIds.has(it.itemId)) {
-            log.info(`new item (${kind}): item=#${it.itemId}「${it.title.slice(0, 40)}」 links=${it.downloadables.length}`)
-            for (const d of it.downloadables) log.info(`  - new link: link=#${d.downloadableId} file="${d.filename}"`)
-          }
-          crawledDl.set(it.itemId, new Set(it.downloadables.map((d) => d.downloadableId)))
-          this.repo.upsertFromList({
-            itemId: it.itemId,
-            title: it.title,
-            thumbnailUrl: it.thumbnailUrl,
-            isGift: it.isGift,
-            downloadables: it.downloadables.map((d) => ({
-              downloadableId: d.downloadableId,
-              variationId: d.variationId,
-              filename: d.filename,
-              fallbackUrl: d.fallbackUrl
-            }))
+        this.onProgress?.({ phase: 'library', current: 0, total: 0, label: kind === 'library' ? '抓取购买库…' : '抓取赠送库…' })
+        try {
+          const listed = await this.crawler.crawlKind(kind, (_k, page, count) => {
+            log.info(`[${kind}] page ${page}: ${count} items`)
           })
-          summary.libraryChecked++
-          // 缩略图立即登记（图片墙用），后台下载
-          if (it.thumbnailUrl) {
-            this.images.registerItemImages(it.itemId, [{ url: it.thumbnailUrl, kind: 'thumb' }])
+          for (const item of listed) {
+            const previous = items.get(item.itemId)
+            if (!previous) items.set(item.itemId, item)
+            else {
+              const links = new Map(previous.downloadables.map((link) => [link.downloadableId, link]))
+              for (const link of item.downloadables) {
+                if (!links.has(link.downloadableId)) links.set(link.downloadableId, link)
+              }
+              previous.downloadables = [...links.values()]
+            }
           }
+        } catch (e) {
+          if (isAuthError(e)) throw e
+          const reason = e instanceof Error ? e.message : String(e)
+          stats.issues.push({ source: kind, reason })
+          stats.listFailures++
+          summary.failed++
+          log.warn(`[${kind}] list fetch failed: ${reason}`)
         }
       }
+
+      const seen = new Set(items.keys())
+      const fetchedLinks = new Set<number>()
+      const crawledDl = new Map<number, Set<number>>()
+      let processed = 0
+      for (const item of items.values()) {
+        if (++processed % 100 === 0) await new Promise<void>((done) => setImmediate(done))
+        const isNew = !knownIds.has(item.itemId)
+        if (isNew) {
+          stats.added++
+          stats.changes.push({ itemId: item.itemId, label: `新增商品：${item.title}` })
+        }
+        const links = new Map(item.downloadables.map((link) => [link.downloadableId, link]))
+        for (const link of links.values()) {
+          if (fetchedLinks.has(link.downloadableId)) continue
+          fetchedLinks.add(link.downloadableId)
+          const old = this.repo.getDownloadable(link.downloadableId)
+          if (isNew) stats.newItemLinks++
+          else if (!old) {
+            stats.linksAdded++
+            stats.changes.push({ itemId: item.itemId, label: `新增下载链接 #${link.downloadableId}` })
+          } else if (old.status === 'missing' ||
+            (link.filename && link.filename !== old.filename) ||
+            (link.variationId != null && link.variationId !== old.variationId) ||
+            (link.fallbackUrl && link.fallbackUrl !== old.fallbackUrl)) {
+            stats.linksChanged++
+            stats.changes.push({ itemId: item.itemId, label: `更新下载链接 #${link.downloadableId}` })
+          }
+        }
+        crawledDl.set(item.itemId, new Set(links.keys()))
+        this.repo.upsertFromList({ ...item, downloadables: [...links.values()] })
+        if (item.thumbnailUrl) stats.imagesPending += this.images.registerItemImages(item.itemId, [{ url: item.thumbnailUrl, kind: 'thumb' }]) ?? 0
+      }
+      summary.libraryChecked = seen.size
+      stats.linksFetched = fetchedLinks.size
 
       // 2) 缺席检测（连续 2 次缺席 → missing）；免费商品不在列表中属正常，跳过
       const allIds = this.dbAllItemIds()
       const freeIds = new Set(this.repo.listFreeItemIds())
       for (const id of allIds) {
-        if (!seen.has(id) && !freeIds.has(id)) {
+        if (stats.listFailures === 0 && !seen.has(id) && !freeIds.has(id)) {
           const title = this.repo.getItemTitle(id)
           const state = this.repo.markAbsent(id)
           if (state === 'missing') log.warn(`absent: item=#${id}「${title.slice(0, 40)}」 not in library list 2 times → marked missing`)
@@ -99,7 +133,7 @@ export class LibrarySyncService {
       //     老文件立即归档到历史 + 链接标失效；新文件已在待下载。（只在该商品列表解析成功时才判定，防解析故障误伤）
       let vanished = 0
       for (const [itemId, keep] of crawledDl) {
-        if (keep.size === 0) continue // 列表解析异常，跳过判定
+        if (stats.listFailures > 0 || keep.size === 0) continue // 列表解析异常，跳过判定
         const dbRows = this.repo.listDownloadablesOfItem(itemId)
         const knownLinks = new Set(dbRows.map((r) => r.downloadableId))
         for (const d of keep) {
@@ -128,13 +162,15 @@ export class LibrarySyncService {
           this.repo.setStatus(row.downloadableId, 'missing')
           this.repo.run('UPDATE downloadables SET local_path = NULL, local_size = NULL WHERE downloadable_id = ?', [row.downloadableId])
           vanished++
+          stats.changes.push({ itemId, label: `移除下载链接 #${row.downloadableId}` })
         }
       }
+      stats.linksRemoved = vanished
       if (vanished > 0) log.info(`vanished downloadables archived: ${vanished}`)
 
-      // 3) 详情页刷新（节流）；免费商品的介绍随同步库更新，文件不在此处理
-      const staleDays = this.opts.detailStaleDays ?? 7
-      const detailTargets = this.pickDetailTargets([...Array.from(seen), ...freeIds], staleDays, forceDetail)
+      // 3) 完整检查本轮库内商品及本地免费商品。
+      const detailTargets = [...new Set([...seen, ...freeIds])]
+      stats.detailsTotal = detailTargets.length
       log.info(`detail refresh targets: ${detailTargets.length}`)
       for (let i = 0; i < detailTargets.length; i++) {
         if (i > 0 && i % 25 === 0) await new Promise<void>((done) => setImmediate(done))
@@ -142,18 +178,39 @@ export class LibrarySyncService {
         this.onProgress?.({ phase: 'library', current: i + 1, total: detailTargets.length, label: `商品详情 ${itemId}` })
         try {
           const detail = await this.itemPage.fetch(itemId)
-          if (this.applyDetail(itemId, detail)) summary.libraryChanged++
+          const result = this.applyDetail(itemId, detail)
+          stats.detailsChecked++
+          stats.imagesPending += result.imagesPending
+          if (knownIds.has(itemId)) {
+            if (result.changed) {
+              summary.libraryChanged++
+              const fields = [
+                result.titleChanged && '标题',
+                result.coverChanged && '封面',
+                result.galleryChanged && `画廊（新增 ${result.galleryAdded}，移除 ${result.galleryRemoved}）`,
+                result.descriptionChanged && '简介'
+              ].filter(Boolean)
+              stats.changes.push({ itemId, label: fields.join('、') + '变化' })
+            }
+            if (result.coverChanged) stats.coversChanged++
+            if (result.galleryChanged) stats.galleriesChanged++
+            if (result.descriptionChanged) stats.descriptionsChanged++
+          }
         } catch (e) {
           if (isAuthError(e)) throw e
           const title = this.repo.getItemTitle(itemId)
           const itemDesc = `item=#${itemId}「${title.slice(0, 40)}」`
           if (e instanceof BoothError && e.kind === 'not_found') {
-            this.repo.run(`UPDATE items SET status = 'missing' WHERE item_id = ?`, [itemId])
+            this.repo.markDetailNotFound(itemId)
+            stats.notFound++
+            stats.issues.push({ itemId, source: '详情页 404', reason: e.message })
             log.info(`${itemDesc} not found on BOOTH (404), marked missing`)
             continue
           }
           const status = e instanceof BoothError && e.status != null ? ` http=${e.status}` : ''
           log.warn(`detail fetch failed: ${itemDesc}${status} → ${e instanceof Error ? e.message : e}`)
+          stats.detailFailures++
+          stats.issues.push({ itemId, source: '商品详情', reason: e instanceof Error ? e.message : String(e) })
           summary.failed++
         }
       }
@@ -161,8 +218,13 @@ export class LibrarySyncService {
       // 增量对账：补入队中断遗留的 pending 图片，并核对已下载图片与派生图文件（后台分页执行，不阻塞同步结束）
       this.images.checkAllImages().catch((e) => log.warn('image check failed:', e instanceof Error ? e.message : e))
 
-      this.repo.setSetting('lastLibrarySyncAt', new Date().toISOString())
-      log.info(`library sync done: ${JSON.stringify(summary)}`)
+      if (stats.listFailures === 0) this.repo.setSetting('lastLibrarySyncAt', new Date().toISOString())
+      log.info(librarySummary(summary))
+      log.info(`下载链接：新商品首次登记 ${stats.newItemLinks} 条，已有商品新增 ${stats.linksAdded} 条，修改 ${stats.linksChanged} 条，移除 ${stats.linksRemoved} 条`)
+      for (const issue of stats.issues) {
+        log.info(`${issue.itemId ? '#' + issue.itemId + ' · ' : ''}${issue.source} · ${issue.reason}`)
+      }
+      for (const change of stats.changes) log.info(`#${change.itemId} · ${change.label}`)
       return summary
     } finally {
       this.running = false
@@ -180,7 +242,7 @@ export class LibrarySyncService {
     this.repo.upsertFromList({
       itemId,
       title: detail.title,
-      thumbnailUrl: detail.ogImageUrl ?? '',
+      thumbnailUrl: '',
       isGift: false,
       isFree: true,
       downloadables: files.map((f) => ({ downloadableId: f.downloadableId, variationId: f.variationId, filename: f.filename }))
@@ -194,22 +256,40 @@ export class LibrarySyncService {
    * 不抓列表、不入队任何文件下载。对所有商品生效（含免费商品）。
    * 返回元数据是否有变化；抓取失败直接抛出。
    */
-  async refreshItem(itemId: number): Promise<{ changed: boolean }> {
-    const detail = await this.itemPage.fetch(itemId)
-    const changed = this.applyDetail(itemId, detail)
-    log.info(`refreshItem ${itemId}: ${changed ? 'changed' : 'unchanged'}`)
-    return { changed }
+  async refreshItem(itemId: number): Promise<RefreshItemResult> {
+    try {
+      const detail = await this.itemPage.fetch(itemId)
+      const result = this.applyDetail(itemId, detail)
+      log.info(`refreshItem ${itemId}: ${JSON.stringify(result)}`)
+      return result
+    } catch (e) {
+      if (!(e instanceof BoothError) || e.kind !== 'not_found') throw e
+      this.repo.markDetailNotFound(itemId)
+      log.info(`refreshItem ${itemId}: not found on BOOTH (404)`)
+      return {
+        changed: false, titleChanged: false, coverChanged: false, galleryChanged: false,
+        galleryAdded: 0, galleryRemoved: 0, descriptionChanged: false, snapshotSaved: false,
+        imagesPending: 0, notFound: true
+      }
+    }
   }
 
-  /** 写入详情字段与新版本快照 + 登记图片与视频；返回是否有快照级变化 */
-  private applyDetail(itemId: number, detail: ItemDetail): boolean {
+  private applyDetail(itemId: number, detail: ItemDetail): RefreshItemResult {
     const hash = metadataHashOf(detail)
     const prev = this.repo.getMetadataHash(itemId)
     const old = this.repo.getItemDetail(itemId)
-    // 从未快照过（prev 为空）视为变化；否则仅简介/标题/封面变化才算，画廊增删不计
-    const changed = prev == null || (!!old && metadataContentChanged(old, detail))
+    const titleChanged = old?.title !== detail.title
+    const coverChanged = (old?.ogImageUrl ?? null) !== detail.ogImageUrl
+    const descriptionChanged = normalizeHtml(old?.descriptionHtml ?? '') !== normalizeHtml(detail.descriptionHtml)
+    const previousGallery = old?.galleryUrls ?? []
+    const galleryChanged = JSON.stringify(previousGallery) !== JSON.stringify(detail.galleryUrls)
+    const galleryAdded = detail.galleryUrls.filter((url) => !previousGallery.includes(url)).length
+    const galleryRemoved = previousGallery.filter((url) => !detail.galleryUrls.includes(url)).length
+    const changed = titleChanged || coverChanged || descriptionChanged || galleryChanged
+    const snapshotNeeded = prev == null || titleChanged || coverChanged || descriptionChanged
+    let snapshotSaved = false
     // 仅兼容已有详情但缺少历史的旧数据；正常更新的旧版本已在历史中，不再次写入。
-    if (changed && prev != null && old?.descriptionHtml && !this.repo.getLatestSnapshot(itemId)) {
+    if (snapshotNeeded && prev != null && old?.descriptionHtml && !this.repo.getLatestSnapshot(itemId)) {
       this.history.writeMetadataSnapshot({
         itemId,
         title: old.title,
@@ -227,9 +307,8 @@ export class LibrarySyncService {
       shopName: detail.shopName,
       metadataHash: hash
     })
-    if (changed) {
-      // 新版本快照
-      this.history.writeMetadataSnapshot({
+    if (snapshotNeeded) {
+      snapshotSaved = this.history.writeMetadataSnapshot({
         itemId,
         title: detail.title,
         descriptionHtml: detail.descriptionHtml,
@@ -242,35 +321,15 @@ export class LibrarySyncService {
     const imgList: Array<{ url: string; kind: string }> = []
     if (detail.ogImageUrl) imgList.push({ url: detail.ogImageUrl, kind: 'og' })
     for (const u of detail.galleryUrls) imgList.push({ url: u, kind: 'gallery' })
-    if (imgList.length) this.images.registerItemImages(itemId, imgList)
+    const imagesPending = imgList.length ? this.images.registerItemImages(itemId, imgList) ?? 0 : 0
     // 画廊远程移除标记（仅标记，不删除记录与本地文件）
     this.repo.syncGalleryRemoval(itemId, detail.galleryUrls)
 
     this.repo.upsertVideos(itemId, detail.videos)
-    return changed
+    return { changed, titleChanged, coverChanged, descriptionChanged, galleryChanged, galleryAdded, galleryRemoved, snapshotSaved, imagesPending }
   }
 
   private dbAllItemIds(): number[] {
     return this.repo.listAllItemIds()
-  }
-
-  /** 选需要刷新详情的商品：强制 / 超龄 / 列表缩略图或标题变化的启发式（此处简单用超龄+新商品） */
-  private pickDetailTargets(ids: number[], staleDays: number, force: boolean): number[] {
-    const cutoff = Date.now() - staleDays * 86400_000
-    const out: number[] = []
-    for (const id of ids) {
-      if (force) {
-        out.push(id)
-        continue
-      }
-      const last = this.repo.getLastDetailAt(id)
-      if (!last) {
-        out.push(id) // 从未抓过详情
-        continue
-      }
-      const t = Date.parse(last.replace(' ', 'T') + 'Z')
-      if (isNaN(t) || t < cutoff) out.push(id)
-    }
-    return out
   }
 }

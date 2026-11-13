@@ -3,7 +3,6 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import type { ItemSummary, TagInfo } from '../../../shared/types'
 import { api } from '../api'
 import { useImageUrl } from '../components/useImageUrl'
-import { requestDerivativePriority } from '../components/derivativePriority'
 import { TagBatchDialog, TagContextMenu, TagFilterDropdown, TagManageDialog } from '../components/TagWidgets'
 
 function ItemCard({
@@ -25,22 +24,21 @@ function ItemCard({
   const [visible, setVisible] = useState(false)
   const fallback = useImageUrl(!visible || item.localThumb ? null : item.thumbnailUrl)
   const thumb = item.localThumb || fallback
-  const enqueued = useRef(false)
+  const enqueued = useRef<string | null>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (visible && !item.localThumb && item.thumbnailUrl && !enqueued.current) {
-      enqueued.current = true
-      void api.images.enqueueItem(item.itemId).catch(() => {})
+    if (visible && !item.localThumb && item.thumbnailUrl && enqueued.current !== item.thumbnailUrl) {
+      enqueued.current = item.thumbnailUrl
+      void api.images.enqueueCover(item.itemId).catch(() => {})
     }
   }, [visible, item.localThumb, item.thumbnailUrl, item.itemId])
-  // 卡片进入可视区时请求优先生成派生图（只通知一次）
+  // 卡片进入可视区时再解析首页封面。
   useEffect(() => {
     const el = cardRef.current
     if (!el || typeof IntersectionObserver === 'undefined') return
     const io = new IntersectionObserver((entries) => {
       if (entries.some((e) => e.isIntersecting)) {
         setVisible(true)
-        requestDerivativePriority(item.itemId)
         io.disconnect()
       }
     }, { rootMargin: '400px' })
@@ -278,23 +276,21 @@ export default function LibraryWallPage({
   // 后台图片下载完成 → 增量替换该商品（不整页刷新）
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
+    const ready = new Set<number>()
     const un = api.events.onImageReady(({ itemId }) => {
-      if (timer) return // 300ms 合批
+      ready.add(itemId)
+      if (timer) return
       timer = setTimeout(() => {
         timer = null
-        void (async () => {
-          const detail = await api.library.getItem(itemId).catch(() => null)
-          if (!detail) return
-          setItems((prev) =>
-            prev
-              ? prev.map((it) =>
-                  it.itemId === itemId
-                    ? { ...it, localThumb: detail.localThumb ?? it.localThumb, thumbnailUrl: detail.thumbnailUrl ?? it.thumbnailUrl }
-                    : it
-                )
-              : prev
-          )
-        })()
+        const ids = [...ready]
+        ready.clear()
+        void Promise.all(ids.map(async (id) => [id, await api.library.getCover(id).catch(() => null)] as const)).then((pairs) => {
+          const covers = new Map(pairs)
+          setItems((prev) => prev?.map((item) => {
+            const cover = covers.get(item.itemId)
+            return cover?.thumbnailUrl === item.thumbnailUrl ? { ...item, ...cover } : item
+          }) ?? prev)
+        })
       }, 300)
     })
     return () => {

@@ -716,7 +716,19 @@ export default function ItemDetailPage({
     setRefreshing(true)
     try {
       const r = await api.library.refreshItem(itemId)
-      toast('info', r.changed ? '商品页已更新（元数据有变化，已保存旧版本快照）' : '商品页已检查，没有变化')
+      const changes = [
+        r.titleChanged && '标题',
+        r.coverChanged && '封面',
+        r.galleryChanged && `画廊（新增 ${r.galleryAdded}，移除 ${r.galleryRemoved}）`,
+        r.descriptionChanged && '简介'
+      ].filter(Boolean)
+      const message = r.notFound ? '商品详情页返回 404，已保留本地详情'
+        : r.changed ? `${changes.join('、')}已更新` : '商品页已检查，没有变化'
+      toast(r.notFound ? 'warn' : 'info', [
+        message,
+        r.snapshotSaved && '已保存历史版本',
+        r.imagesPending > 0 && `${r.imagesPending} 张图片待下载`
+      ].filter(Boolean).join(' · '))
       await load()
       onChanged()
     } catch (e) {
@@ -984,7 +996,7 @@ export default function ItemDetailPage({
             </div>
             <div className="side-actions">
               <button onClick={() => void doCheck()} disabled={checking}>
-                {checking ? '检查中…' : '🔍 检查全部链接'}
+                {checking ? '检查中…' : '🔍 检查当前商品下载文件更新'}
               </button>
               <button className="primary" onClick={() => void doDownloadItem()}>
                 ⬇ 下载全部文件

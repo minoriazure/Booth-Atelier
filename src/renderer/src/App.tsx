@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CheckProgressEvent, CheckSummary, DeepLinkHostPrompt, ReconcileProgress, Settings } from '../../shared/types'
+import { librarySummary } from '../../shared/librarySyncSummary'
 import { api } from './api'
 import LibraryWallPage from './pages/LibraryWallPage'
 import ItemDetailPage from './pages/ItemDetailPage'
@@ -36,11 +37,32 @@ export default function App() {
   const tab = nav.entries[nav.index].tab
   const detailId = nav.entries[nav.index].detailId
   const mainRef = useRef<HTMLDivElement>(null)
+  const syncDetailsRef = useRef<HTMLDetailsElement>(null)
+  const closeSyncDetails = useCallback(() => {
+    if (syncDetailsRef.current?.open) syncDetailsRef.current.open = false
+  }, [])
+
+  useEffect(() => {
+    const dismiss = (event: Event): void => {
+      const panel = syncDetailsRef.current
+      if (!panel?.open) return
+      const inside = event.target instanceof Node && panel.contains(event.target)
+      if (!inside || event.type === 'contextmenu') closeSyncDetails()
+    }
+    const events = ['pointerdown', 'click', 'contextmenu', 'wheel', 'scroll']
+    for (const name of events) window.addEventListener(name, dismiss, { capture: true, passive: true })
+    window.addEventListener('popstate', closeSyncDetails)
+    return () => {
+      for (const name of events) window.removeEventListener(name, dismiss, true)
+      window.removeEventListener('popstate', closeSyncDetails)
+    }
+  }, [closeSyncDetails])
   /** 离开资源库时记录的滚动位置，返回资源库时恢复 */
   const wallScrollRef = useRef(0)
 
   const navigate = useCallback(
     (target: Nav) => {
+      closeSyncDetails()
       if (tab === 'library' && detailId === null) wallScrollRef.current = mainRef.current?.scrollTop ?? 0
       setNav((s) => {
         const cur = s.entries[s.index]
@@ -49,18 +71,19 @@ export default function App() {
         return { entries, index: entries.length - 1 }
       })
     },
-    [tab, detailId]
+    [tab, detailId, closeSyncDetails]
   )
 
   const step = useCallback(
     (delta: number) => {
+      closeSyncDetails()
       if (tab === 'library' && detailId === null) wallScrollRef.current = mainRef.current?.scrollTop ?? 0
       setNav((s) => {
         const next = s.index + delta
         return next < 0 || next >= s.entries.length ? s : { ...s, index: next }
       })
     },
-    [tab, detailId]
+    [tab, detailId, closeSyncDetails]
   )
 
   useEffect(() => {
@@ -101,6 +124,7 @@ export default function App() {
   const [libraryVersion, setLibraryVersion] = useState(0) // 变化时触发子页面刷新
   /** 最近一次完成的确认（底栏最下行，状态确认用） */
   const [lastCompleted, setLastCompleted] = useState<string | null>(null)
+  const [lastLibrarySync, setLastLibrarySync] = useState<CheckSummary | null>(null)
   const [imgProgress, setImgProgress] = useState<{ done: number; total: number; active: number; queued: number } | null>(null)
   const [derivProgress, setDerivProgress] = useState<{ done: number; total: number; failed: number } | null>(null)
   const [reconcileProgress, setReconcileProgress] = useState<ReconcileProgress | null>(null)
@@ -198,9 +222,14 @@ export default function App() {
   useEffect(() => {
     const unsubs = [
       api.events.onLibraryUpdated((summary) => {
-        setLastCompleted(
-          `✓ 检查完成：${summary.filesChecked} 链接 / ${summary.filesUpdated} 更新 / ${summary.libraryChanged} 元数据变更`
-        )
+        if (summary.library) {
+          setLastLibrarySync(summary)
+          const message = librarySummary(summary)
+          setLastCompleted(message)
+          pushToast(summary.library.issues.length ? 'warn' : 'info', message)
+        } else {
+          setLastCompleted(`文件检查完成：检查 ${summary.filesChecked} 个链接，发现 ${summary.filesUpdated} 个更新`)
+        }
         setLibraryVersion((v) => v + 1)
         setProgress(null)
       }),
@@ -270,14 +299,11 @@ export default function App() {
     async (fn: () => Promise<CheckSummary>, label: string) => {
       try {
         const s = await fn()
-        setLastCompleted(
-          `✓ ${label}完成：检查 ${s.filesChecked} 链接，发现 ${s.filesUpdated} 个更新${s.libraryChanged ? `，${s.libraryChanged} 个商品元数据变更` : ''}`
-        )
-        setLibraryVersion((v) => v + 1)
-        pushToast(
-          'info',
-          `${label}完成：检查 ${s.filesChecked} 个链接，发现 ${s.filesUpdated} 个更新，下载 ${s.downloaded} 个${s.failed ? `，失败 ${s.failed}` : ''}`
-        )
+        if (s.library) setLastLibrarySync(s)
+        const message = s.library ? librarySummary(s)
+          : `${label}完成：检查 ${s.filesChecked} 个链接，发现 ${s.filesUpdated} 个更新，入队 ${s.downloaded} 个，失败 ${s.failed} 个`
+        setLastCompleted(message)
+        pushToast(s.failed || s.library?.notFound ? 'warn' : 'info', message)
         setAuthOk(true)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -292,6 +318,7 @@ export default function App() {
           pushToast('error', `${label}失败：${msg}`)
         }
       } finally {
+        setLibraryVersion((v) => v + 1)
         setProgress(null)
       }
     },
@@ -313,7 +340,7 @@ export default function App() {
           同步库
         </button>
         <button onClick={doCheckGlobal} disabled={progress !== null} title="检查所有商品所有下载链接的文件更新，发现即自动下载">
-          检查全部更新
+          检查全部下载文件更新
         </button>
         <button
           className="primary"
@@ -445,7 +472,7 @@ export default function App() {
         )}
         {reconcileProgress && reconcileProgress.total > 0 && reconcileProgress.checked < reconcileProgress.total && (
           <div className="status-line active">
-            <span className="status-label">🔍 检查图片</span>
+            <span className="status-label">🔍 修复本地图片</span>
             <div className="progressbar img-progress">
               <div style={{ width: `${Math.min(100, (reconcileProgress.checked / reconcileProgress.total) * 100)}%` }} />
             </div>
@@ -453,6 +480,24 @@ export default function App() {
               {reconcileProgress.checked}/{reconcileProgress.total}
             </span>
           </div>
+        )}
+        {lastLibrarySync?.library && (
+          <details ref={syncDetailsRef} className="library-sync-result">
+            <summary>最近一次库同步详情</summary>
+            <p>{librarySummary(lastLibrarySync)}</p>
+            <p>
+              下载链接：新商品首次登记 {lastLibrarySync.library.newItemLinks} 条，
+              已有商品新增 {lastLibrarySync.library.linksAdded} 条，
+              修改 {lastLibrarySync.library.linksChanged} 条，
+              移除 {lastLibrarySync.library.linksRemoved} 条
+            </p>
+            {lastLibrarySync.library.issues.map((issue, index) => (
+              <div key={`issue-${index}`}>{issue.itemId ? `#${issue.itemId} · ` : ''}{issue.source} · {issue.reason}</div>
+            ))}
+            {lastLibrarySync.library.changes.map((change, index) => (
+              <div key={`change-${index}`}>#{change.itemId} · {change.label}</div>
+            ))}
+          </details>
         )}
         {/* 最底行：已完成的状态确认 */}
         <div className="status-line bottom">

@@ -417,7 +417,7 @@ export default function UpdatesPage({
     <div className="dl-page">
       <div className="panel">
         <div className="dl-toolbar">
-          <button onClick={onRunCheck}>🔍 检查全局更新</button>
+          <button onClick={onRunCheck}>🔍 检查全部下载文件更新</button>
           <button
             className="primary"
             disabled={busy || (counts.pending === 0 && stats.queued === 0 && !stats.userPaused && !stats.paused)}

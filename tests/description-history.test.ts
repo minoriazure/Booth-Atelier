@@ -78,14 +78,14 @@ describe('description history', () => {
     const initial = repo.listSnapshotDates(1)[0]
     vi.setSystemTime(new Date('2026-11-10T12:00:00Z'))
     detail = { ...detail, descriptionHtml: '<p>Updated</p>' }
-    expect(await service.refreshItem(1)).toEqual({ changed: true })
+    expect(await service.refreshItem(1)).toMatchObject({ changed: true })
     const entries = repo.listSnapshotDates(1)
     expect(entries).toHaveLength(2)
     expect(entries[1]).toEqual(initial)
     expect(repo.getSnapshotById(entries[0].id)?.descriptionHtml).toBe(detail.descriptionHtml)
     expect(readFileSync(paths.descriptionPath(1), 'utf8')).toBe(detail.descriptionHtml)
     expect(readdirSync(paths.snapshotsDir(1))).toHaveLength(2)
-    expect(await service.refreshItem(1)).toEqual({ changed: false })
+    expect(await service.refreshItem(1)).toMatchObject({ changed: false })
     expect(repo.listSnapshotDates(1)).toHaveLength(2)
   })
 
@@ -93,11 +93,11 @@ describe('description history', () => {
     await service.refreshItem(1)
     repo.upsertFromList({ itemId: 1, title: 'Product (Standard)', thumbnailUrl: 'thumb', isGift: true, downloadables: [] })
     expect(repo.getItemDetail(1)).toMatchObject({ title: 'Product', thumbnailUrl: 'thumb', isGift: true })
-    expect(await service.refreshItem(1)).toEqual({ changed: false })
+    expect(await service.refreshItem(1)).toMatchObject({ changed: false })
     expect(repo.listSnapshotDates(1)).toHaveLength(1)
     // A genuine title change on the detail page must still be archived.
     detail = { ...detail, title: 'Renamed product' }
-    expect(await service.refreshItem(1)).toEqual({ changed: true })
+    expect(await service.refreshItem(1)).toMatchObject({ changed: true })
     expect(repo.listSnapshotDates(1).map(s => s.title)).toEqual(['Renamed product', 'Product'])
   })
 
@@ -119,7 +119,7 @@ describe('description history', () => {
   it('records cover-only updates even on the same day', async () => {
     await service.refreshItem(1)
     detail = { ...detail, ogImageUrl: 'https://example.com/new-cover.jpg' }
-    expect(await service.refreshItem(1)).toEqual({ changed: true })
+    expect(await service.refreshItem(1)).toMatchObject({ changed: true })
     const entries = repo.listSnapshotDates(1)
     expect(entries).toHaveLength(2)
     expect(repo.getSnapshotById(entries[0].id)?.ogImageUrl).toBe(detail.ogImageUrl)
@@ -128,7 +128,7 @@ describe('description history', () => {
   it('does not create versions for gallery-only or normalized whitespace changes', async () => {
     await service.refreshItem(1)
     detail = { ...detail, galleryUrls: ['https://example.com/gallery.jpg'] }
-    expect(await service.refreshItem(1)).toEqual({ changed: false })
+    expect(await service.refreshItem(1)).toMatchObject({ changed: true, galleryChanged: true, galleryAdded: 1, snapshotSaved: false })
     expect(repo.getItemDetail(1)?.galleryUrls).toEqual(detail.galleryUrls)
     history.writeMetadataSnapshot({ ...detail, descriptionHtml: '  <p>Original</p>\n' })
     expect(repo.listSnapshotDates(1)).toHaveLength(1)

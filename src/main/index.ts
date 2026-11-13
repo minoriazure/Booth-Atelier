@@ -303,11 +303,10 @@ if (!gotLock) {
     // 后台补齐存量图片的缩略图（异步 sharp 单并发，不卡 UI；新图在下载完成时已即时生成；原图缺失的会重新下载）
     const backfillCtx = ctx
     setTimeout(() => {
-      try {
-        backfillCtx.imageLocalizer.startThumbBackfill()
-      } catch (e) {
-        log.warn('thumb backfill failed:', e)
-      }
+      void backfillCtx.imageLocalizer.migrateLegacyNames()
+        .catch((e) => log.warn('image filename migration failed:', e))
+        .then(() => backfillCtx.imageLocalizer.startThumbBackfill())
+        .catch((e) => log.warn('thumb backfill failed:', e))
     }, 3000)
 
     // 测试辅助：BOOTH_SCREENSHOT=path → 页面加载完成后截图
@@ -440,12 +439,9 @@ if (!gotLock) {
       return
     }
     void ctx.startup.runOnStartup().then((result) => {
-      if (result.authOk && result.summary) {
-        emit('event:libraryUpdated', result.summary)
-        emit('event:toast', {
-          level: 'info',
-          message: `启动检查完成：${result.summary.libraryChecked} 个商品，${result.summary.filesChecked} 个链接，${result.summary.filesUpdated} 个更新`
-        })
+      if (result.summary) emit('event:libraryUpdated', result.summary)
+      if (result.error) {
+        emit('event:toast', { level: 'error', message: `启动检查中止：${result.error}` })
       } else if (result.authError) {
         log.warn('startup auth:', result.authError)
       }

@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio'
 import { createHash } from 'crypto'
+import { createLogger } from '../util/log'
 import { BoothError } from './errors'
 import { sniffAuthFailure, type HttpClient } from './httpClient'
 import type { ItemDetail, VideoReference } from '../../shared/types'
@@ -13,6 +14,8 @@ import type { ItemDetail, VideoReference } from '../../shared/types'
  *   + div.my-40（后续段落 section.shop__text、内嵌视频 section[&>iframe] 等）
  * 描述完整 HTML = main-info-column 与其后 my-40 内全部内容。
  */
+const log = createLogger('itemPage')
+
 export class ItemPageParser {
   constructor(private http: HttpClient) {}
 
@@ -39,13 +42,14 @@ export function parseItemPage(html: string, itemId: number): ItemDetail {
   // ── 画廊图（头部大图区，原图在 data-origin，懒加载在 data-lazy）──
   const galleryUrls: string[] = []
   const pushUrl = (u?: string | null): void => {
-    if (!u) return
+    if (!u || u === ogImage) return
     if (!galleryUrls.includes(u)) galleryUrls.push(u)
   }
-  pushUrl(ogImage)
   $('img.market-item-detail-item-image').each((_, el) => {
     const $img = $(el)
-    pushUrl($img.attr('data-origin') || $img.attr('data-lazy') || $img.attr('src'))
+    const origin = $img.attr('data-origin')?.trim()
+    if (origin) pushUrl(origin)
+    else log.warn(`item #${itemId}: gallery image ${_ + 1} has no data-origin`)
   })
 
   // ── 描述完整 HTML：main-info-column 起，到其后的 my-40 结束 ──
@@ -214,7 +218,7 @@ export function metadataContentChanged(
   )
 }
 
-function normalizeHtml(html: string): string {
+export function normalizeHtml(html: string): string {
   return html.replace(/\s+/g, ' ').trim()
 }
 

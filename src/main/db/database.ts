@@ -4,7 +4,7 @@ import initSqlJs, { Database } from 'sql.js'
 import { createLogger } from '../util/log'
 
 const log = createLogger('db')
-const SCHEMA_VERSION = 14
+const SCHEMA_VERSION = 15
 
 /**
  * SQLite (sql.js / WASM) 封装。
@@ -173,6 +173,22 @@ export class Db {
       this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (14, datetime('now'))`)
       this.markDirty()
       log.info('migrations applied: 014_queued_source')
+    }
+    if (Number(version) < 15) {
+      this.transaction(() => {
+        if (!this.db.exec('PRAGMA table_info(items)')[0]?.values.some((column) => column[1] === 'detail_not_found')) {
+          this.db.run('ALTER TABLE items ADD COLUMN detail_not_found INTEGER NOT NULL DEFAULT 0')
+          this.db.run(`UPDATE items SET detail_not_found = 1 WHERE status = 'missing' AND absent_count < 2`)
+        }
+        this.db.run(`CREATE TABLE IF NOT EXISTS image_name_cleanup (
+          item_id INTEGER NOT NULL, old_filename TEXT NOT NULL, PRIMARY KEY (item_id, old_filename)
+        )`)
+        this.db.run(`UPDATE item_images SET kind = 'og', remote_removed = 0
+          WHERE kind = 'gallery' AND (url IN (SELECT og_image_url FROM items)
+            OR url IN (SELECT og_image_url FROM metadata_snapshots)
+            OR url LIKE 'https://booth.pximg.net/c/620x620/%')`)
+        this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (15, datetime('now'))`)
+      })
     }
   }
 

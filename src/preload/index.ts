@@ -67,7 +67,8 @@ export interface BoothAPI {
     list(q?: string): Promise<ItemSummary[]>
     search(q: string): Promise<ItemSummary[]>
     getItem(id: number): Promise<ItemDetailRow | null>
-    sync(forceDetail?: boolean): Promise<CheckSummary>
+    getCover(id: number): Promise<{ thumbnailUrl: string | null; localThumb: string | null } | null>
+    sync(): Promise<CheckSummary>
     /** 返回本地缓存图片路径的 app:// URL */
     imageUrl(remoteUrl: string): Promise<string | null>
     imageThumbUrl(remoteUrl: string): Promise<string | null>
@@ -132,6 +133,7 @@ export interface BoothAPI {
   }
   images: {
     enqueueItem(itemId: number): Promise<number>
+    enqueueCover(itemId: number): Promise<number>
     prioritize(itemIds: number[]): Promise<number>
     repair(): Promise<{ resetCount: number; checked: number; redownload: number; derivMarked: number; pendingQueued: number }>
     /** 启动图片检查（每次启动仅执行一次；未开启或已执行过则返回 null） */
@@ -210,7 +212,8 @@ const api: BoothAPI = {
     list: (q) => ipcRenderer.invoke('library:list', q),
     search: (q) => ipcRenderer.invoke('library:search', q),
     getItem: (id) => ipcRenderer.invoke('library:getItem', id),
-    sync: (forceDetail) => ipcRenderer.invoke('library:sync', forceDetail ?? false),
+    getCover: (id) => ipcRenderer.invoke('library:getCover', id),
+    sync: () => ipcRenderer.invoke('library:sync'),
     imageUrl: (remoteUrl) => ipcRenderer.invoke('library:imageUrl', remoteUrl),
     imageThumbUrl: (remoteUrl) => ipcRenderer.invoke('library:imageThumbUrl', remoteUrl),
     openItemPage: (id) => ipcRenderer.invoke('library:openItemPage', id),
@@ -267,6 +270,7 @@ const api: BoothAPI = {
   },
   images: {
     enqueueItem: (itemId) => ipcRenderer.invoke('images:enqueueItem', itemId),
+    enqueueCover: (itemId) => ipcRenderer.invoke('images:enqueueCover', itemId),
     prioritize: (itemIds) => ipcRenderer.invoke('images:prioritize', itemIds),
     checkItem: (itemId) => ipcRenderer.invoke('images:checkItem', itemId),
     repair: () => ipcRenderer.invoke('images:repair'),

@@ -77,13 +77,23 @@ export class StartupService {
       }
       let checkSummary: CheckSummary | null = null
       if (s.autoCheckFilesOnStartup && fileDue) {
-        checkSummary = await this.checker.checkGlobal()
+        try {
+          checkSummary = await this.checker.checkGlobal()
+        } catch (e) {
+          result.error = e instanceof Error ? e.message : String(e)
+          if (isAuthError(e)) {
+            this.onAuthExpired?.(result.error)
+            result.authOk = false
+          }
+          log.warn('startup file check failed:', result.error)
+        }
       }
       const zero: CheckSummary = { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
       const a = syncSummary ?? zero
       const b = checkSummary ?? zero
       result.summary = {
         libraryChecked: a.libraryChecked + b.libraryChecked,
+        library: a.library,
         libraryChanged: a.libraryChanged + b.libraryChanged,
         filesChecked: a.filesChecked + b.filesChecked,
         filesUpdated: a.filesUpdated + b.filesUpdated,

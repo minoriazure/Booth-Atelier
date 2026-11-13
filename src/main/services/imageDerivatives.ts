@@ -1,5 +1,5 @@
 import sharp from 'sharp'
-import { existsSync, statSync } from 'fs'
+import { statSync } from 'fs'
 import { mkdir, writeFile, rename } from 'fs/promises'
 import { join } from 'path'
 
@@ -42,7 +42,8 @@ export async function generateDerivatives(src: string, thumbDest: string, previe
 }
 
 export function fileOk(p: string): boolean {
-  return existsSync(p) && statSync(p).size > 0
+  const stat = statSync(p, { throwIfNoEntry: false })
+  return !!stat?.isFile() && stat.size > 0
 }
 
 

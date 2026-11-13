@@ -78,7 +78,7 @@ export class LibraryRepo {
       // 列表标题可能带购买规格（如“通常版”）；已有详情时以商店页标题为准。
       this.db.run(
         `UPDATE items SET title = CASE WHEN metadata_hash IS NULL THEN ? ELSE title END,
-         thumbnail_url = ?, is_gift = ?, is_free = ?, last_list_at = datetime('now'), status = 'active', absent_count = 0 WHERE item_id = ?`,
+         thumbnail_url = COALESCE(NULLIF(?, ''), thumbnail_url), is_gift = ?, is_free = ?, last_list_at = datetime('now'), status = CASE WHEN detail_not_found = 1 THEN 'missing' ELSE 'active' END, absent_count = 0 WHERE item_id = ?`,
         [input.title, input.thumbnailUrl, input.isGift ? 1 : 0, isFree, input.itemId]
       )
     }
@@ -91,7 +91,8 @@ export class LibraryRepo {
         )
       } else {
         this.db.run(
-          `UPDATE downloadables SET filename = COALESCE(NULLIF(?, ''), filename), variation_id = COALESCE(?, variation_id), fallback_url = COALESCE(?, fallback_url) WHERE downloadable_id = ?`,
+          `UPDATE downloadables SET filename = COALESCE(NULLIF(?, ''), filename), variation_id = COALESCE(?, variation_id), fallback_url = COALESCE(?, fallback_url),
+             status = CASE WHEN status = 'missing' THEN 'remote' ELSE status END WHERE downloadable_id = ?`,
           [d.filename, d.variationId, d.fallbackUrl ?? null, d.downloadableId]
         )
       }
@@ -110,7 +111,7 @@ export class LibraryRepo {
   }): void {
     this.db.run(
       `UPDATE items SET title = ?, description_html = ?, og_image_url = ?, gallery_json = ?,
-        shop_name = COALESCE(?, shop_name), metadata_hash = ?, last_detail_at = datetime('now'), status = 'active', absent_count = 0
+        shop_name = COALESCE(?, shop_name), metadata_hash = ?, last_detail_at = datetime('now'), detail_not_found = 0, status = 'active', absent_count = 0
        WHERE item_id = ?`,
       [input.title, input.descriptionHtml, input.ogImageUrl, JSON.stringify(input.galleryUrls), input.shopName, input.metadataHash, input.itemId]
     )
@@ -118,7 +119,7 @@ export class LibraryRepo {
   }
 
   touchList(itemId: number): void {
-    this.db.run(`UPDATE items SET last_list_at = datetime('now'), status = 'active', absent_count = 0 WHERE item_id = ?`, [itemId])
+    this.db.run(`UPDATE items SET last_list_at = datetime('now'), status = CASE WHEN detail_not_found = 1 THEN 'missing' ELSE 'active' END, absent_count = 0 WHERE item_id = ?`, [itemId])
   }
 
   /** 标记缺席（连续 2 次后置 missing） */
@@ -158,15 +159,20 @@ export class LibraryRepo {
     return this.db.get<{ metadata_hash: string | null }>('SELECT metadata_hash FROM items WHERE item_id = ?', [itemId])?.metadata_hash ?? null
   }
 
-  getLastDetailAt(itemId: number): string | null {
-    return this.db.get<{ last_detail_at: string | null }>('SELECT last_detail_at FROM items WHERE item_id = ?', [itemId])?.last_detail_at ?? null
+  markDetailNotFound(itemId: number): void {
+    this.db.run(`UPDATE items SET detail_not_found = 1, status = 'missing' WHERE item_id = ?`, [itemId])
+  }
+
+  getCover(itemId: number): { url: string | null; kind: 'thumb' | 'og' } | undefined {
+    return this.db.get(`SELECT CASE WHEN detail_not_found = 1 THEN NULLIF(thumbnail_url, '') ELSE og_image_url END AS url,
+      CASE WHEN detail_not_found = 1 THEN 'thumb' ELSE 'og' END AS kind FROM items WHERE item_id = ?`, [itemId])
   }
 
   listSummaries(q?: string): ItemSummary[] {
     const where = q ? 'WHERE (i.title LIKE ? OR i.shop_name LIKE ?)' : ''
     const params = q ? [`%${q}%`, `%${q}%`] : []
     return this.attachTags(this.db.all<ItemSummaryRow>(
-      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, COALESCE(NULLIF(i.thumbnail_url, ''), i.og_image_url) AS thumbnailUrl,
+      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, CASE WHEN i.detail_not_found = 1 THEN NULLIF(i.thumbnail_url, '') ELSE i.og_image_url END AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
@@ -211,7 +217,7 @@ export class LibraryRepo {
       itemUrl: String(i.item_url ?? ''),
       ogImageUrl: (i.og_image_url as string) ?? null,
       descriptionHtml: String(i.description_html ?? ''),
-      galleryUrls: safeJsonArray(i.gallery_json),
+      galleryUrls: safeJsonArray(i.gallery_json).filter((url) => url !== i.og_image_url),
       fileTotal: counts?.total ?? files.length,
       fileDownloaded: counts?.downloaded ?? 0,
       fileUpdateAvailable: counts?.updates ?? 0,
@@ -623,7 +629,7 @@ export class LibraryRepo {
   search(q: string, page?: { limit: number; after?: { title: string; itemId: number } }): ItemSummary[] {
     const like = `%${q}%`
     return this.attachTags(this.db.all<ItemSummaryRow>(
-      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, COALESCE(NULLIF(i.thumbnail_url, ''), i.og_image_url) AS thumbnailUrl,
+      `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, CASE WHEN i.detail_not_found = 1 THEN NULLIF(i.thumbnail_url, '') ELSE i.og_image_url END AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
@@ -796,6 +802,37 @@ export class LibraryRepo {
     }
   }
 
+  listImagePage(after: number, limit: number): ImageRef[] {
+    return this.db.all(`SELECT rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images
+      WHERE rowid > ? ORDER BY rowid LIMIT ?`, [after, limit])
+  }
+
+  imageFilenameInUse(itemId: number, filename: string, derivativeFilename: string | null, url: string): boolean {
+    return !!this.db.get(`SELECT 1 FROM item_images WHERE item_id = ? AND url != ? AND
+      (filename = ? COLLATE NOCASE OR (? IS NOT NULL AND kind NOT IN ('thumb', 'og')
+        AND substr(filename, 1, length(?) + 1) = (? || '.') COLLATE NOCASE
+        AND instr(substr(filename, length(?) + 2), '.') = 0)) LIMIT 1`,
+      [itemId, url, filename, derivativeFilename, derivativeFilename, derivativeFilename, derivativeFilename])
+  }
+
+  setImageFilename(image: ImageRef, filename: string): void {
+    this.db.run('UPDATE item_images SET filename = ? WHERE url = ?', [filename, image.url])
+    this.db.run('INSERT OR IGNORE INTO image_name_cleanup (item_id, old_filename) VALUES (?, ?)', [image.itemId, image.filename])
+  }
+
+  listImageNameCleanup(after: number): Array<{ rid: number; itemId: number; filename: string }> {
+    return this.db.all(`SELECT rowid AS rid, item_id AS itemId, old_filename AS filename
+      FROM image_name_cleanup WHERE rowid > ? ORDER BY rowid LIMIT 100`, [after])
+  }
+
+  finishImageNameCleanup(rid: number): void {
+    this.db.run('DELETE FROM image_name_cleanup WHERE rowid = ?', [rid])
+  }
+
+  flushImageNames(): void {
+    this.db.flush(true)
+  }
+
   markImageDone(url: string, bytes: number): void {
     this.db.run(`UPDATE item_images SET status = 'done', bytes = ?, updated_at = datetime('now') WHERE url = ?`, [bytes, url])
   }
@@ -811,7 +848,7 @@ export class LibraryRepo {
   listDerivativeCandidates(afterRowid: number, limit: number): ImageRef[] {
     return this.db.all(
       `SELECT rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images
-       WHERE status = 'done' AND derivative_attempts < 3
+       WHERE status = 'done' AND kind NOT IN ('thumb', 'og') AND derivative_attempts < 3
          AND (thumb_status != 'ok' OR preview_status != 'ok') AND rowid > ?
        ORDER BY rowid LIMIT ?`,
       [afterRowid, limit]
@@ -822,7 +859,7 @@ export class LibraryRepo {
   listDerivativeCandidatesByItem(itemId: number): ImageRef[] {
     return this.db.all(
       `SELECT rowid AS rid, url, item_id AS itemId, kind, filename FROM item_images
-       WHERE status = 'done' AND derivative_attempts < 3
+       WHERE status = 'done' AND kind NOT IN ('thumb', 'og') AND derivative_attempts < 3
          AND (thumb_status != 'ok' OR preview_status != 'ok') AND item_id = ?
        ORDER BY rowid`,
       [itemId]
@@ -914,6 +951,7 @@ export class LibraryRepo {
   /** 删除某商品在所有表中的记录（单事务）。仅影响本地数据，BOOTH 端不受影响 */
   deleteItemRows(itemId: number): void {
     this.db.transaction(() => {
+      this.db.run('DELETE FROM image_name_cleanup WHERE item_id = ?', [itemId])
       this.db.run('DELETE FROM item_images WHERE item_id = ?', [itemId])
       this.db.run('DELETE FROM item_videos WHERE item_id = ?', [itemId])
       this.db.run('DELETE FROM items_search WHERE item_id = ?', [itemId])

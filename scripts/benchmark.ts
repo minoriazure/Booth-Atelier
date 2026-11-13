@@ -40,7 +40,7 @@ async function main(): Promise<void> {
       const crawler = { crawlKind: async (kind: string) => kind === 'gifts' ? [] : Array.from({ length: size }, (_, i) => ({ itemId: i + 1, title: `Asset ${i + 1} needle`, thumbnailUrl: '', isGift: false, downloadables: [] })) } as unknown as LibraryCrawler
       const sync = new LibrarySyncService(crawler, { fetch: async (id: number) => detail(id) } as unknown as ItemPageParser, repo,
         new HistoryManager(repo, new Paths(join(dir, 'data'), join(dir, 'downloads'))), { checkAllImages: async () => ({}) } as ImageLocalizer)
-      const syncStart = performance.now(); await sync.sync(true); const offlineSyncMs = performance.now() - syncStart
+      const syncStart = performance.now(); await sync.sync(); const offlineSyncMs = performance.now() - syncStart
       await new Promise((done) => setTimeout(done, 20)); loop.disable()
       console.log(JSON.stringify({ size, seedMs, offlineSyncMs, searchP95Ms: searches.sort((a, b) => a - b)[Math.ceil(searches.length * .95) - 1], historyMs, historyPayloadBytes: Buffer.byteLength(JSON.stringify(index)), flushMs, eventLoopMaxMs: loop.max / 1e6, rssMB: process.memoryUsage().rss / 1048576,
         queryPlan: db.all('EXPLAIN QUERY PLAN SELECT item_id FROM items WHERE title LIKE ?', ['%needle%']) }))

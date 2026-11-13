@@ -178,12 +178,12 @@ export default function SettingsPage({
                 setRepairing(true)
                 api.images
                   .repair()
-                  .then((r) => toast('info', `已开始检查图片：重置 ${r.resetCount} 条失败记录，补入队 ${r.pendingQueued} 张未完成的原图，缺失的原图将重新下载、缩略图将重新生成`))
+                  .then((r) => toast('info', `已开始修复本地图片：重置 ${r.resetCount} 条失败记录，补入队 ${r.pendingQueued} 张未完成的原图，缺失的原图将重新下载、缩略图将重新生成`))
                   .catch((e) => toast('error', `修复失败：${e instanceof Error ? e.message : e}`))
                   .finally(() => setRepairing(false))
               }}
             >
-              检查并修复图片
+              修复本地图片
             </button>
           </div>
           <div className="value" style={{ opacity: 0.7 }}>
@@ -367,7 +367,7 @@ export default function SettingsPage({
               />
               <span className="slider" />
             </label>
-            <span className="hint">拉取商品简介/宣传图/新购入商品（图片后台自动下载）</span>
+            <span className="hint">同步购买库和赠送库，并完整检查商品封面、画廊和简介（图片后台下载）</span>
           </div>
         </div>
         <div className="setting-row">
@@ -385,7 +385,7 @@ export default function SettingsPage({
           </div>
         </div>
         <div className="setting-row">
-          <div className="label">启动时检查并修复图片</div>
+          <div className="label">启动时修复本地图片</div>
           <div className="value">
             <label className="switch">
               <input
