@@ -105,6 +105,7 @@ export interface DownloadableFileRow {
   variationId: number | null
   status: DownloadableStatus
   localPath: string | null
+  archivedPath: string | null
   localSize: number | null
   lastSize: number | null
   lastEtag: string | null

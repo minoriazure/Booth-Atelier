@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { DownloadInventory, DownloadStats, FileListRow } from '../../../shared/types'
 import { api } from '../api'
+import { EXPIRED_FILE_MISSING, EXPIRED_FILE_PRESENT } from '../components/expiredFileStatus'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
 
@@ -36,10 +37,9 @@ const STATUS_META: Record<ViewStatus, { label: string; cls: string }> = {
   update: { label: '待下载·更新', cls: 'pending-update' },
   remote: { label: '待下载', cls: 'pending' },
   downloaded: { label: '已完成', cls: 'done' },
-  missing: { label: '已失效，无本地文件', cls: 'missing' }
+  missing: EXPIRED_FILE_MISSING
 }
 
-const MISSING_WITH_FILE = { label: '已失效，本地文件存在', cls: 'update' }
 const filenameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 const FILTERS: Array<{ key: string; label: string }> = [
@@ -518,7 +518,7 @@ export default function UpdatesPage({
               const allFiles = filesByItem.get(itemId) ?? files
               const hasCurrentFile = allFiles.some((file) => file.localPath)
               const summary = groupSummary(allFiles, progressMap)
-              const missingMeta = summary.missingWithoutFile ? STATUS_META.missing : MISSING_WITH_FILE
+              const missingMeta = summary.missingWithoutFile ? STATUS_META.missing : EXPIRED_FILE_PRESENT
               const meta = summary.status === 'missing' ? missingMeta : STATUS_META[summary.status]
               return (
                 <Fragment key={itemId}>
@@ -571,7 +571,7 @@ export default function UpdatesPage({
                   {isExpanded && files.map((r) => {
                     const vs = viewStatusOf(r)
                     const localPath = r.localPath ?? r.archivedPath
-                    const meta = vs === 'missing' && localPath ? MISSING_WITH_FILE : STATUS_META[vs]
+                    const meta = vs === 'missing' && localPath ? EXPIRED_FILE_PRESENT : STATUS_META[vs]
                     const progress = progressMap.get(r.downloadableId)
                     return (
                       <tr key={r.downloadableId} className={`dl-row dl-child-row dl-row-${vs}`}>

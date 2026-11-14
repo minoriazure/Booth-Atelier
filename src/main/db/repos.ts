@@ -191,7 +191,7 @@ export class LibraryRepo {
       [itemId]
     )
     if (!i) return undefined
-    const files = this.db.all<DownloadableFileRow>(
+    const files = this.db.all<Omit<DownloadableFileRow, 'archivedPath'>>(
       `SELECT downloadable_id AS downloadableId, item_id AS itemId, filename, variation_id AS variationId, status,
               local_path AS localPath, local_size AS localSize, last_size AS lastSize, last_etag AS lastEtag,
               last_checked_at AS lastCheckedAt
@@ -221,7 +221,7 @@ export class LibraryRepo {
       fileTotal: counts?.total ?? files.length,
       fileDownloaded: counts?.downloaded ?? 0,
       fileUpdateAvailable: counts?.updates ?? 0,
-      downloadables: files.map((f) => ({ ...f, localPath: this.downloadLocalOut(f.localPath) })),
+      downloadables: files.map((f) => ({ ...f, localPath: this.downloadLocalOut(f.localPath), archivedPath: null })),
       localThumb: null, // 由上层（组装 media URL）填充
       localGallery: [],
       videos: []
@@ -521,13 +521,14 @@ export class LibraryRepo {
     ).map((r) => this.fileHistoryOut(itemId, r))
   }
 
-  listMissingFileArchives(): Array<{ downloadableId: number; archivedPath: string }> {
+  listMissingFileArchives(itemId?: number): Array<{ downloadableId: number; archivedPath: string }> {
     return this.db.all<{ downloadableId: number; itemId: number; archivedPath: string }>(
       `SELECT h.downloadable_id AS downloadableId, h.item_id AS itemId, h.archived_path AS archivedPath
        FROM file_history h
        JOIN downloadables d ON d.downloadable_id = h.downloadable_id AND d.item_id = h.item_id
-       WHERE d.status = 'missing'
-       ORDER BY h.archived_at DESC, h.id DESC`
+       WHERE d.status = 'missing'${itemId === undefined ? '' : ' AND h.item_id = ?'}
+       ORDER BY h.archived_at DESC, h.id DESC`,
+      itemId === undefined ? [] : [itemId]
     ).map(({ downloadableId, itemId, archivedPath }) => ({
       downloadableId,
       archivedPath: this.paths ? this.paths.resolveArchivedLocal(itemId, archivedPath) : archivedPath

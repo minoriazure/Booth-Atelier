@@ -344,10 +344,10 @@ export class DownloadManager {
     return n
   }
 
-  /** 全文件列表：DB 行 + 运行时队列/活动状态合并 */
-  listFiles(): FileListRow[] {
-    const rows = this.repo.listAllFileRows()
-    const queued = new Set(this.queue.map((job) => job.downloadableId))
+  withExistingLocalFiles<T extends { downloadableId: number; status: string; localPath: string | null }>(
+    rows: T[],
+    itemId?: number
+  ): Array<T & { archivedPath: string | null }> {
     const isLocalFile = (path: string | null): boolean => {
       if (!path) return false
       try {
@@ -358,20 +358,31 @@ export class DownloadManager {
     }
     const archivedPaths = new Map<number, string>()
     if (rows.some((row) => row.status === 'missing')) {
-      for (const { downloadableId, archivedPath } of this.repo.listMissingFileArchives()) {
+      for (const { downloadableId, archivedPath } of this.repo.listMissingFileArchives(itemId)) {
         if (!archivedPaths.has(downloadableId) && isLocalFile(archivedPath)) {
           archivedPaths.set(downloadableId, archivedPath)
         }
       }
     }
+    return rows.map((row) => ({
+      ...row,
+      localPath: isLocalFile(row.localPath) ? row.localPath : null,
+      archivedPath: archivedPaths.get(row.downloadableId) ?? null
+    }))
+  }
+
+  /** 全文件列表：DB 行 + 运行时队列/活动状态合并 */
+  listFiles(): FileListRow[] {
+    const rows = this.withExistingLocalFiles(this.repo.listAllFileRows())
+    const queued = new Set(this.queue.map((job) => job.downloadableId))
     return rows.map((r) => ({
       downloadableId: r.downloadableId,
       itemId: r.itemId,
       itemTitle: r.itemTitle,
       filename: r.filename,
       status: r.status as FileListRow['status'],
-      localPath: isLocalFile(r.localPath) ? r.localPath : null,
-      archivedPath: archivedPaths.get(r.downloadableId) ?? null,
+      localPath: r.localPath,
+      archivedPath: r.archivedPath,
       localSize: r.localSize,
       lastSize: r.lastSize,
       inQueue: queued.has(r.downloadableId) || !!r.queuedAt,

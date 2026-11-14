@@ -4,6 +4,7 @@ import type { VideoProgressEvent } from '../../../preload/index'
 import DeleteItemDialog from '../components/DeleteItemDialog'
 import { buildBoothDescHtml } from '../components/boothDesc'
 import { formatCapturedAt } from '../components/formatTime'
+import { EXPIRED_FILE_MISSING, EXPIRED_FILE_PRESENT } from '../components/expiredFileStatus'
 import { api } from '../api'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
@@ -1004,30 +1005,34 @@ export default function ItemDetailPage({
             </div>
 
             <div className="side-files" ref={sideFilesRef}>
-              {item.downloadables.map((f) => (
-                <div className="side-file" key={f.downloadableId}>
-                  <div className="side-file-name" title={f.filename}>{f.filename}</div>
-                  <div className="side-file-meta">
-                    <span>{formatBytes(f.localSize ?? f.lastSize)}</span>
-                    {f.status === 'downloaded' && <span className="badge done">已下载</span>}
-                    {f.status === 'update_available' && <span className="badge update">有更新</span>}
-                    {f.status === 'remote' && <span className="badge">未下载</span>}
-                    {f.status === 'missing' && <span className="badge missing">已失效</span>}
+              {item.downloadables.map((f) => {
+                const localPath = f.localPath ?? f.archivedPath
+                const expiredStatus = localPath ? EXPIRED_FILE_PRESENT : EXPIRED_FILE_MISSING
+                return (
+                  <div className="side-file" key={f.downloadableId}>
+                    <div className="side-file-name" title={f.filename}>{f.filename}</div>
+                    <div className="side-file-meta">
+                      <span>{formatBytes(f.localSize ?? f.lastSize)}</span>
+                      {f.status === 'downloaded' && <span className="badge done">已下载</span>}
+                      {f.status === 'update_available' && <span className="badge update">有更新</span>}
+                      {f.status === 'remote' && <span className="badge">未下载</span>}
+                      {f.status === 'missing' && <span className={`badge ${expiredStatus.cls}`}>{expiredStatus.label}</span>}
+                    </div>
+                    <div className="side-file-actions">
+                      <button
+                        className="mini-btn"
+                        disabled={downloading.includes(f.downloadableId) || f.status === 'missing'}
+                        onClick={() => void doDownloadOne(f.downloadableId)}
+                      >
+                        {f.status === 'downloaded' ? '重新下载' : f.status === 'update_available' ? '下载更新' : '下载'}
+                      </button>
+                      {localPath && (
+                        <button className="mini-btn" onClick={() => void api.history.revealPath(localPath)} title={localPath}>位置</button>
+                      )}
+                    </div>
                   </div>
-                  <div className="side-file-actions">
-                    <button
-                      className="mini-btn"
-                      disabled={downloading.includes(f.downloadableId) || f.status === 'missing'}
-                      onClick={() => void doDownloadOne(f.downloadableId)}
-                    >
-                      {f.status === 'downloaded' ? '重新下载' : f.status === 'update_available' ? '下载更新' : '下载'}
-                    </button>
-                    {f.localPath && (
-                      <button className="mini-btn" onClick={() => void api.history.revealPath(f.localPath!)}>位置</button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         </aside>

@@ -183,6 +183,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     const rid = id.parse(itemId)
     const detail = ctx.repo.getItemDetail(rid)
     if (!detail) return null
+    detail.downloadables = ctx.downloads.withExistingLocalFiles(detail.downloadables, rid)
     const removedUrls = ctx.repo.listRemovedGalleryUrls(rid).filter((url) => url !== detail.ogImageUrl)
     const removedSet = new Set(removedUrls)
     const galleryAll = [...detail.galleryUrls, ...removedUrls.filter((u) => !detail.galleryUrls.includes(u))]
