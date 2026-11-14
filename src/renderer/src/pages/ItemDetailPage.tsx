@@ -5,6 +5,7 @@ import DeleteItemDialog from '../components/DeleteItemDialog'
 import { buildBoothDescHtml } from '../components/boothDesc'
 import { formatCapturedAt } from '../components/formatTime'
 import { EXPIRED_FILE_MISSING, EXPIRED_FILE_PRESENT } from '../components/expiredFileStatus'
+import { compareDownloadFilenames } from '../components/compareDownloadFilenames'
 import { api } from '../api'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
@@ -1005,7 +1006,7 @@ export default function ItemDetailPage({
             </div>
 
             <div className="side-files" ref={sideFilesRef}>
-              {item.downloadables.map((f) => {
+              {[...item.downloadables].sort(compareDownloadFilenames).map((f) => {
                 const localPath = f.localPath ?? f.archivedPath
                 const expiredStatus = localPath ? EXPIRED_FILE_PRESENT : EXPIRED_FILE_MISSING
                 return (

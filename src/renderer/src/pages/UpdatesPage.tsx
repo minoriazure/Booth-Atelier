@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import type { DownloadInventory, DownloadStats, FileListRow } from '../../../shared/types'
 import { api } from '../api'
 import { EXPIRED_FILE_MISSING, EXPIRED_FILE_PRESENT } from '../components/expiredFileStatus'
+import { compareDownloadFilenames } from '../components/compareDownloadFilenames'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
 
@@ -39,8 +40,6 @@ const STATUS_META: Record<ViewStatus, { label: string; cls: string }> = {
   downloaded: { label: '已完成', cls: 'done' },
   missing: EXPIRED_FILE_MISSING
 }
-
-const filenameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'all', label: '全部' },
@@ -313,7 +312,7 @@ export default function UpdatesPage({
       else byItem.set(row.itemId, [row])
     }
     return Array.from(byItem.values(), (files) =>
-      files.sort((a, b) => filenameOrder.compare(a.filename, b.filename) || a.downloadableId - b.downloadableId)
+      files.sort(compareDownloadFilenames)
     )
   }, [rows, filter, query])
 
