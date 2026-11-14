@@ -15,9 +15,9 @@ function formatBytes(n: number | null | undefined): string {
 type ViewStatus = 'downloading' | 'queued' | 'failed' | 'update' | 'remote' | 'downloaded' | 'missing'
 
 function viewStatusOf(r: FileListRow): ViewStatus {
+  if (r.status === 'missing') return 'missing'
   if (r.active) return 'downloading'
   if (r.inQueue) return 'queued'
-  if (r.status === 'missing') return 'missing'
   if (r.failed) return 'failed'
   if (r.status === 'downloaded') return 'downloaded'
   if (r.status === 'update_available') return 'update'
@@ -36,8 +36,11 @@ const STATUS_META: Record<ViewStatus, { label: string; cls: string }> = {
   update: { label: '待下载·更新', cls: 'pending-update' },
   remote: { label: '待下载', cls: 'pending' },
   downloaded: { label: '已完成', cls: 'done' },
-  missing: { label: '已失效', cls: 'missing' }
+  missing: { label: '已失效，无本地文件', cls: 'missing' }
 }
+
+const MISSING_WITH_FILE = { label: '已失效，本地文件存在', cls: 'update' }
+const filenameOrder = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'all', label: '全部' },
@@ -45,20 +48,21 @@ const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'queued', label: '排队中' },
   { key: 'active', label: '下载中' },
   { key: 'failed', label: '失败' },
-  { key: 'downloaded', label: '已完成' }
+  { key: 'downloaded', label: '已完成' },
+  { key: 'missing', label: '已失效' }
 ]
 
 /**
  * 表格列定义（资源管理器式拖拽调宽）：
  * - pct = 默认宽度占表格容器宽度的百分比（合计 100，全部默认时正好填满、无横向滚动条）
- * - min = 最小像素宽度（状态列需容纳「待下载·更新」不换行）
+ * - min = 最小像素宽度（状态列需容纳失效状态文案）
  * - 用户拖过的宽度存 localStorage，双击分隔线恢复默认
  */
 const COLS: Array<{ key: string; label: string; cls: string; pct: number; min: number }> = [
   { key: 'item', label: '商品', cls: 'dl-th-item', pct: 28, min: 120 },
   { key: 'file', label: '文件', cls: 'dl-th-file', pct: 28, min: 160 },
   { key: 'size', label: '大小', cls: 'dl-th-size', pct: 8, min: 64 },
-  { key: 'status', label: '状态', cls: 'dl-th-status', pct: 10, min: 100 },
+  { key: 'status', label: '状态', cls: 'dl-th-status', pct: 10, min: 152 },
   { key: 'progress', label: '进度', cls: 'dl-th-progress', pct: 12, min: 140 },
   { key: 'action', label: '操作', cls: 'dl-th-action', pct: 14, min: 160 }
 ]
@@ -108,11 +112,15 @@ function groupSummary(files: FileListRow[], progressMap: Map<number, Progress>) 
   let unknown = false
   let downloadable = 0
   let completed = 0
+  let missingWithoutFile = false
   const statuses = new Set<ViewStatus>()
   for (const file of files) {
     const status = viewStatusOf(file)
     statuses.add(status)
-    if (status === 'missing') continue
+    if (status === 'missing') {
+      if (!file.localPath && !file.archivedPath) missingWithoutFile = true
+      continue
+    }
     downloadable++
     const progress = status === 'downloading' ? progressMap.get(file.downloadableId) : undefined
     const size = status === 'downloaded' ? file.localSize ?? file.lastSize : file.lastSize
@@ -128,7 +136,7 @@ function groupSummary(files: FileListRow[], progressMap: Map<number, Progress>) 
   }
   const status = (Object.keys(STATUS_META) as ViewStatus[]).find((s) => statuses.has(s) && s !== 'downloaded' && s !== 'missing')
     ?? (completed > 0 ? 'downloaded' : 'missing')
-  return { done, total, unknown, downloadable, completed, status, hasMissing: statuses.has('missing') }
+  return { done, total, unknown, downloadable, completed, status, hasMissing: statuses.has('missing'), missingWithoutFile }
 }
 
 export default function UpdatesPage({
@@ -280,31 +288,34 @@ export default function UpdatesPage({
     }
   }, [load])
 
-  const filtered = useMemo(() => {
+  const groups = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return rows.filter((r) => {
+    const missingItems = new Set(rows.filter((r) => r.status === 'missing').map((r) => r.itemId))
+    const matching = rows.filter((r) => {
       const vs = viewStatusOf(r)
       if (filter === 'pending' && !isPendingBucket(vs)) return false
       if (filter === 'queued' && vs !== 'queued') return false
       if (filter === 'active' && vs !== 'downloading') return false
       if (filter === 'failed' && vs !== 'failed') return false
       if (filter === 'downloaded' && vs !== 'downloaded') return false
+      if (filter === 'missing' && !missingItems.has(r.itemId)) return false
       if (q && !r.filename.toLowerCase().includes(q) && !r.itemTitle.toLowerCase().includes(q) && !String(r.itemId).includes(q)) {
         return false
       }
       return true
     })
-  }, [rows, filter, query])
-
-  const groups = useMemo(() => {
+    const matchingItems = new Set(matching.map((r) => r.itemId))
+    const visible = filter === 'missing' ? rows.filter((r) => matchingItems.has(r.itemId)) : matching
     const byItem = new Map<number, FileListRow[]>()
-    for (const row of filtered) {
+    for (const row of visible) {
       const files = byItem.get(row.itemId)
       if (files) files.push(row)
       else byItem.set(row.itemId, [row])
     }
-    return Array.from(byItem.values())
-  }, [filtered])
+    return Array.from(byItem.values(), (files) =>
+      files.sort((a, b) => filenameOrder.compare(a.filename, b.filename) || a.downloadableId - b.downloadableId)
+    )
+  }, [rows, filter, query])
 
   const filesByItem = useMemo(() => {
     const byItem = new Map<number, FileListRow[]>()
@@ -366,14 +377,15 @@ export default function UpdatesPage({
     }
   }
 
-  const doRedownload = async (itemId?: number): Promise<void> => {
+  const doRedownload = async (itemId?: number, firstDownload = false): Promise<void> => {
+    const action = firstDownload ? '下载' : '重新下载'
     setBusy(true)
     try {
       const count = itemId === undefined ? await api.downloads.redownloadAll() : await api.downloads.redownloadItem(itemId)
-      toast('info', count > 0 ? `已安排 ${count} 个文件重新下载` : '没有可重新加入队列的文件')
+      toast('info', count > 0 ? `已安排 ${count} 个文件${action}` : '没有可加入队列的文件')
       await load()
     } catch (e) {
-      toast('error', `重新下载失败：${e instanceof Error ? e.message : String(e)}`)
+      toast('error', `${action}失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setBusy(false)
     }
@@ -503,8 +515,11 @@ export default function UpdatesPage({
             {groups.map((files) => {
               const { itemId, itemTitle } = files[0]
               const isExpanded = expanded.has(itemId)
-              const summary = groupSummary(filesByItem.get(itemId) ?? files, progressMap)
-              const meta = STATUS_META[summary.status]
+              const allFiles = filesByItem.get(itemId) ?? files
+              const hasCurrentFile = allFiles.some((file) => file.localPath)
+              const summary = groupSummary(allFiles, progressMap)
+              const missingMeta = summary.missingWithoutFile ? STATUS_META.missing : MISSING_WITH_FILE
+              const meta = summary.status === 'missing' ? missingMeta : STATUS_META[summary.status]
               return (
                 <Fragment key={itemId}>
                   <tr className={`dl-row dl-group-row dl-row-${summary.status}`}>
@@ -522,7 +537,7 @@ export default function UpdatesPage({
                     <td className="dl-cell-status">
                       <div className="dl-group-status">
                         <span className={`badge ${meta.cls}`}>{meta.label}</span>
-                        {summary.hasMissing && summary.status !== 'missing' && <span className="badge missing">存在失效文件</span>}
+                        {summary.hasMissing && summary.status !== 'missing' && <span className={`badge ${missingMeta.cls}`}>存在失效文件</span>}
                       </div>
                     </td>
                     <td className="dl-cell-progress">
@@ -540,20 +555,23 @@ export default function UpdatesPage({
                         <button
                           className="mini-btn"
                           disabled={busy || !redownloadableItems.has(itemId)}
-                          onClick={() => void doRedownload(itemId)}
-                          title="重新下载该商品的所有有效文件"
+                          onClick={() => void doRedownload(itemId, !hasCurrentFile)}
+                          title={hasCurrentFile ? '重新下载该商品的所有有效文件' : '下载该商品的所有有效文件'}
                         >
-                          整组重下
+                          {hasCurrentFile ? '整组重下' : '整组下载'}
                         </button>
-                        <button className="mini-btn" onClick={() => void openItemDir(itemId)} title="打开该商品的下载文件夹">
-                          位置
-                        </button>
+                        {hasCurrentFile && (
+                          <button className="mini-btn" onClick={() => void openItemDir(itemId)} title="打开该商品的下载文件夹">
+                            位置
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
                   {isExpanded && files.map((r) => {
                     const vs = viewStatusOf(r)
-                    const meta = STATUS_META[vs]
+                    const localPath = r.localPath ?? r.archivedPath
+                    const meta = vs === 'missing' && localPath ? MISSING_WITH_FILE : STATUS_META[vs]
                     const progress = progressMap.get(r.downloadableId)
                     return (
                       <tr key={r.downloadableId} className={`dl-row dl-child-row dl-row-${vs}`}>
@@ -588,14 +606,16 @@ export default function UpdatesPage({
                                 取消
                               </button>
                             ) : vs === 'missing' ? (
-                              <span className="dl-na">—</span>
+                              localPath
+                                ? <span className="mini-btn dl-action-spacer" aria-hidden="true">重新下载</span>
+                                : <span className="dl-na">—</span>
                             ) : (
                               <button className="mini-btn" onClick={() => void rowAction(r, vs)}>
                                 {vs === 'failed' ? '↻ 重试' : vs === 'downloaded' ? '重新下载' : vs === 'update' ? '下载更新' : '下载'}
                               </button>
                             )}
-                            {r.localPath && (
-                              <button className="mini-btn" onClick={() => void api.history.revealPath(r.localPath!)} title={r.localPath}>
+                            {localPath && (
+                              <button className="mini-btn" onClick={() => void api.history.revealPath(localPath)} title={localPath}>
                                 位置
                               </button>
                             )}
@@ -607,7 +627,7 @@ export default function UpdatesPage({
                 </Fragment>
               )
             })}
-            {filtered.length === 0 && (
+            {groups.length === 0 && (
               <tr>
                 <td colSpan={6}>
                   <div className="empty" style={{ padding: 30 }}>

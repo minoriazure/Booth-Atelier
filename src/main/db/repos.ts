@@ -521,6 +521,19 @@ export class LibraryRepo {
     ).map((r) => this.fileHistoryOut(itemId, r))
   }
 
+  listMissingFileArchives(): Array<{ downloadableId: number; archivedPath: string }> {
+    return this.db.all<{ downloadableId: number; itemId: number; archivedPath: string }>(
+      `SELECT h.downloadable_id AS downloadableId, h.item_id AS itemId, h.archived_path AS archivedPath
+       FROM file_history h
+       JOIN downloadables d ON d.downloadable_id = h.downloadable_id AND d.item_id = h.item_id
+       WHERE d.status = 'missing'
+       ORDER BY h.archived_at DESC, h.id DESC`
+    ).map(({ downloadableId, itemId, archivedPath }) => ({
+      downloadableId,
+      archivedPath: this.paths ? this.paths.resolveArchivedLocal(itemId, archivedPath) : archivedPath
+    }))
+  }
+
   private fileHistoryOut(itemId: number, row: FileHistoryEntry): FileHistoryEntry {
     return { ...row, archivedPath: this.paths ? this.paths.resolveArchivedLocal(itemId, row.archivedPath) : row.archivedPath }
   }

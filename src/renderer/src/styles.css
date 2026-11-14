@@ -2433,6 +2433,10 @@ button.danger-solid:hover:not(:disabled) {
   gap: 6px;
   align-items: center;
 }
+.dl-cell-action .dl-action-spacer {
+  border: 1px solid transparent;
+  visibility: hidden;
+}
 .dl-na {
   color: var(--text-dim);
 }

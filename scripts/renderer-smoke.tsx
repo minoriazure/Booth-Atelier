@@ -54,20 +54,25 @@ Object.assign(window, { runRegression: async () => {
   const { default: UpdatesPage } = await import('../src/renderer/src/pages/UpdatesPage')
   const file: FileListRow = {
     downloadableId: 1, itemId: 1, itemTitle: 'Grouped product', filename: 'finished.zip',
-    status: 'downloaded', localPath: null, localSize: 100, lastSize: 100,
+    status: 'downloaded', localPath: 'C:/booth/finished.zip', archivedPath: null, localSize: 100, lastSize: 100,
     inQueue: false, active: false, progress: null, failed: false, lastError: null
   }
   let emitDownloadProgress: ((event: DownloadProgressEvent) => void) | undefined
   let redownloads = 0
   let openedItem: number | undefined
   let redownloadedItem: number | undefined
+  let revealedPath: string | undefined
+  const archivedPath = 'C:/booth/history/old-2.zip'
   Object.assign(api, { library: { openItemDir: async (id: number) => { openedItem = id; return '' } } })
+  Object.assign(api.history as object, { revealPath: async (path: string) => { revealedPath = path } })
   Object.assign(api, { downloads: {
     list: async () => [file, {
-      ...file, downloadableId: 2, filename: 'active.zip', status: 'remote', localSize: null,
+      ...file, downloadableId: 2, filename: 'active.zip', status: 'remote', localPath: null, localSize: null,
       lastSize: 300, active: true, progress: { done: 100, total: 300 }
-    }, { ...file, itemId: 2, downloadableId: 3, itemTitle: 'Another product' }, {
-      ...file, itemId: 2, downloadableId: 4, itemTitle: 'Another product', status: 'missing'
+    }, { ...file, itemId: 2, downloadableId: 3, itemTitle: 'Another product', status: 'remote', localPath: null }, {
+      ...file, itemId: 2, downloadableId: 4, itemTitle: 'Another product', filename: 'old-10.zip', status: 'missing', localPath: null
+    }, {
+      ...file, itemId: 2, downloadableId: 5, itemTitle: 'Another product', filename: 'old-2.zip', status: 'missing', localPath: null, archivedPath
     }],
     inventory: async () => ({ items: 1, files: 2, freeItems: 1, freeFiles: 2 }),
     stats: async () => ({ active: 1, queued: 0, paused: false, userPaused: false }),
@@ -90,9 +95,10 @@ Object.assign(window, { runRegression: async () => {
   assert(groupButtons.length === 2 && !document.querySelector('.dl-child-row'), 'download groups did not start collapsed')
   assert(document.querySelector('.dl-stats')?.textContent?.includes('共 1 个免费商品，包含 2 个文件'), 'download inventory did not list free products separately')
   const secondGroupBadges = [...document.querySelectorAll('.dl-group-row:nth-child(2) .dl-group-status .badge')]
-  assert(secondGroupBadges.map((badge) => badge.textContent).join('/') === '已完成/存在失效文件', 'completed group lost its separate missing-files badge')
+  assert(secondGroupBadges.map((badge) => badge.textContent).join('/') === '待下载/存在失效文件', 'group lost its separate missing-files badge')
   const groupActions = document.querySelectorAll<HTMLButtonElement>('.dl-group-row .actions-inner button')
   assert(groupActions[0].textContent?.trim() === '整组重下' && groupActions[1].textContent?.trim() === '位置', 'download group actions have the wrong labels or order')
+  assert(groupActions.length === 3 && groupActions[2].textContent?.trim() === '整组下载', 'group without current files showed redownload or open-folder actions')
   groupActions[0].click()
   groupActions[1].click()
   await wait()
@@ -101,6 +107,7 @@ Object.assign(window, { runRegression: async () => {
   groupButtons[0].click()
   await wait()
   const children = document.querySelectorAll('.dl-child-row')
+  const fileLocationX = children[1].querySelector<HTMLButtonElement>('.actions-inner button:last-child')!.getBoundingClientRect().x
   assert(children.length === 2 && groupButtons[0].getAttribute('aria-expanded') === 'true', 'expanding a download group did not reveal its files')
   const childFile = children[0].querySelector('.dl-cell-file')!
   const groupFile = document.querySelector('.dl-group-row .dl-cell-file')!
@@ -125,6 +132,21 @@ Object.assign(window, { runRegression: async () => {
   completedFilter.click()
   await wait()
   assert(document.querySelector('.dl-group-row .dl-cell-status')?.textContent === '下载中', 'filtering hid an unfinished file from the group status')
+  const missingFilter = [...document.querySelectorAll<HTMLButtonElement>('.dl-filter')].find((button) => button.textContent?.startsWith('已失效'))!
+  missingFilter.click()
+  await wait()
+  const missingGroup = document.querySelectorAll<HTMLButtonElement>('.dl-group-toggle')
+  assert(missingGroup.length === 1 && missingGroup[0].textContent?.includes('Another product'), 'expired filter selected the wrong products')
+  missingGroup[0].click()
+  await wait()
+  const missingChildren = [...document.querySelectorAll('.dl-child-row')]
+  assert(missingChildren.map((row) => row.querySelector('.fname')?.textContent).join('/') === 'finished.zip/old-2.zip/old-10.zip', 'expired filter lost siblings or filename order')
+  assert(missingChildren[1].querySelector('.badge.update')?.textContent === '已失效，本地文件存在', 'archived file lost its warning badge')
+  assert(missingChildren[2].querySelector('.badge.missing')?.textContent === '已失效，无本地文件' && !missingChildren[2].querySelector('button'), 'missing file had the wrong badge or actions')
+  const archivedLocation = missingChildren[1].querySelector('button')!
+  assert(archivedLocation.getBoundingClientRect().x === fileLocationX, 'expired file location is not aligned with the completed file location')
+  archivedLocation.click()
+  assert(revealedPath === archivedPath, 'expired file location did not target its archive')
 
   Object.assign(api.tags as object, { list: async () => [] })
   const wallBench: unknown[] = []

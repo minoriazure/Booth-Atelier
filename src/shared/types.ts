@@ -403,6 +403,7 @@ export interface FileListRow {
   /** DB 状态：remote | downloaded | update_available | missing */
   status: DownloadableStatus
   localPath: string | null
+  archivedPath: string | null
   localSize: number | null
   lastSize: number | null
   /** 是否在下载队列中 */

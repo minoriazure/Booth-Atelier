@@ -32,6 +32,22 @@ function seed() {
   const part = paths.currentFilePath(1, 'asset.bin') + '.part'
   preparePartial(part, { id: 1, etag: 'version', size: 6 }); writeFileSync(part, 'abc'); return part
 }
+
+it('reports only existing current and archived files for expired links', () => {
+  const current = paths.currentFilePath(1, 'asset.bin')
+  writeFileSync(current, 'abc')
+  repo.markDownloaded(1, current, 3)
+  repo.setStatus(1, 'missing')
+  expect(manager.listFiles()[0]).toMatchObject({ status: 'missing', localPath: current, archivedPath: null })
+
+  const history = new HistoryManager(repo, paths)
+  const archived = history.archivePath(1, current)!
+  repo.addFileHistory({ itemId: 1, downloadableId: 1, date: '2026-11-14', archivedPath: archived, filename: 'asset.bin', etag: null, size: 3 })
+  expect(manager.listFiles()[0]).toMatchObject({ localPath: null, archivedPath: archived })
+
+  rmSync(archived)
+  expect(manager.listFiles()[0]).toMatchObject({ localPath: null, archivedPath: null })
+})
 it.each([200, 206])('handles resumed HTTP %i without duplicating bytes', async (status) => {
   const part = seed()
   vi.mocked(systemFetch).mockResolvedValue(new Response(status === 200 ? 'abcdef' : 'def', { status, headers: status === 206 ? { 'content-range': 'bytes 3-5/6' } : {} }))

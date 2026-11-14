@@ -348,13 +348,30 @@ export class DownloadManager {
   listFiles(): FileListRow[] {
     const rows = this.repo.listAllFileRows()
     const queued = new Set(this.queue.map((job) => job.downloadableId))
+    const isLocalFile = (path: string | null): boolean => {
+      if (!path) return false
+      try {
+        return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false
+      } catch {
+        return false
+      }
+    }
+    const archivedPaths = new Map<number, string>()
+    if (rows.some((row) => row.status === 'missing')) {
+      for (const { downloadableId, archivedPath } of this.repo.listMissingFileArchives()) {
+        if (!archivedPaths.has(downloadableId) && isLocalFile(archivedPath)) {
+          archivedPaths.set(downloadableId, archivedPath)
+        }
+      }
+    }
     return rows.map((r) => ({
       downloadableId: r.downloadableId,
       itemId: r.itemId,
       itemTitle: r.itemTitle,
       filename: r.filename,
       status: r.status as FileListRow['status'],
-      localPath: r.localPath,
+      localPath: isLocalFile(r.localPath) ? r.localPath : null,
+      archivedPath: archivedPaths.get(r.downloadableId) ?? null,
       localSize: r.localSize,
       lastSize: r.lastSize,
       inQueue: queued.has(r.downloadableId) || !!r.queuedAt,
