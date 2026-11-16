@@ -10,7 +10,7 @@ Object.assign(window, { runRegression: async () => {
   const clean = sanitizeDesc('<base href="https://evil.test"><svg><a href="javascript:alert(1)">bad</a></svg><img src="x" onerror="alert(1)"><a href="jav&#97;script:alert(1)">x</a><iframe srcdoc="x" src="https://evil.test"></iframe><p class="test">Safe<br><strong>text</strong></p><a href="https://booth.pm/">web</a>')
   assert(!/javascript:|onerror|srcdoc|<svg|<base|<iframe/.test(clean), 'unsafe description survived')
   assert(clean.includes('<strong>text</strong>') && clean.includes('https://booth.pm/'), 'valid formatting lost')
-  const item = { itemId: 1, title: 'Test asset', shopName: 'Shop', thumbnailUrl: null, localThumb: null, isGift: false, isFree: false, status: 'active', fileTotal: 0, fileDownloaded: 0, fileUpdateAvailable: 0, tags: [] }
+  const item = { itemId: 1, title: 'Test asset', shopName: 'Shop', thumbnailUrl: null, localThumb: null, isGift: false, isFree: false, status: 'active', fileTotal: 0, fileExpired: 0, fileDownloaded: 0, fileUpdateAvailable: 0, tags: [] }
   const snapshot = (id: number) => ({ id, itemId: 1, snapshotDate: '2026-11-10', capturedAt: '2026-11-10 12:00:00', title: 'Test', descriptionHtml: `<p>version-${id}</p>`, ogImageUrl: null, localImages: {} })
   Object.assign(window, { boothAPI: {
     history: {

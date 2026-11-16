@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 
 const options = [
   ['all', '全部商品'], ['library', '仅库商品'], ['gift', '仅赠送'],
-  ['free', '仅免费'], ['undownloaded', '未下载完'], ['updates', '有文件更新'], ['delisted', '已下架']
+  ['free', '仅免费'], ['undownloaded', '未下载完'], ['updates', '有文件更新'],
+  ['expired', '存在失效链接'], ['delisted', '已下架']
 ] as const
 export type ItemFilter = typeof options[number][0]
 

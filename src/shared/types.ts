@@ -82,6 +82,7 @@ export interface ItemSummary {
   isFree: boolean
   status: ItemStatus
   fileTotal: number
+  fileExpired: number
   fileDownloaded: number
   fileUpdateAvailable: number
   tags: TagRef[]

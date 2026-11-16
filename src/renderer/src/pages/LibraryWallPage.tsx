@@ -95,11 +95,12 @@ function ItemCard({
           {item.isFree && <span className="badge free">免费</span>}
           {item.status === 'missing' && <span className="badge missing">已下架</span>}
           {item.fileUpdateAvailable > 0 && <span className="badge update">有更新 · {item.fileUpdateAvailable}</span>}
-          {item.fileDownloaded > 0 && (
-            <span className={`badge ${item.fileDownloaded === item.fileTotal && item.fileUpdateAvailable === 0 ? 'done' : ''}`}>
-              已下载 {item.fileDownloaded}/{item.fileTotal}
+          {item.fileTotal > item.fileExpired && (
+            <span className={`badge ${item.fileDownloaded === item.fileTotal - item.fileExpired ? 'done' : ''}`}>
+              已下载 {item.fileDownloaded}/{item.fileTotal - item.fileExpired}
             </span>
           )}
+          {item.fileExpired > 0 && <span className="badge update">失效链接 {item.fileExpired}</span>}
           {item.fileTotal === 0 && <span className="badge">无文件</span>}
         </div>
       </div>
@@ -312,7 +313,8 @@ export default function LibraryWallPage({
       if (filter === 'library' && (i.isFree || i.isGift)) return false
       if (filter === 'gift' && !i.isGift) return false
       if (filter === 'free' && !i.isFree) return false
-      if (filter === 'undownloaded' && i.fileDownloaded >= i.fileTotal) return false
+      if (filter === 'undownloaded' && i.fileDownloaded >= i.fileTotal - i.fileExpired) return false
+      if (filter === 'expired' && i.fileExpired === 0) return false
       if (filter === 'updates' && i.fileUpdateAvailable <= 0) return false
       if (filter === 'delisted' && i.status !== 'missing') return false
       if (untagged && i.tags.length > 0) return false

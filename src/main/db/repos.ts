@@ -175,6 +175,7 @@ export class LibraryRepo {
       `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, CASE WHEN i.detail_not_found = 1 THEN NULLIF(i.thumbnail_url, '') ELSE i.og_image_url END AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
+              SUM(CASE WHEN d.status = 'missing' THEN 1 ELSE 0 END) AS fileExpired,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
               SUM(CASE WHEN d.status = 'update_available' THEN 1 ELSE 0 END) AS fileUpdateAvailable
        FROM items i LEFT JOIN downloadables d ON d.item_id = i.item_id
@@ -198,8 +199,9 @@ export class LibraryRepo {
        FROM downloadables WHERE item_id = ? ORDER BY downloadable_id`,
       [itemId]
     )
-    const counts = this.db.get<{ total: number; downloaded: number; updates: number }>(
+    const counts = this.db.get<{ total: number; expired: number; downloaded: number; updates: number }>(
       `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN status = 'missing' THEN 1 ELSE 0 END) AS expired,
               SUM(CASE WHEN status = 'downloaded' THEN 1 ELSE 0 END) AS downloaded,
               SUM(CASE WHEN status = 'update_available' THEN 1 ELSE 0 END) AS updates
        FROM downloadables WHERE item_id = ?`,
@@ -219,6 +221,7 @@ export class LibraryRepo {
       descriptionHtml: String(i.description_html ?? ''),
       galleryUrls: safeJsonArray(i.gallery_json).filter((url) => url !== i.og_image_url),
       fileTotal: counts?.total ?? files.length,
+      fileExpired: counts?.expired ?? 0,
       fileDownloaded: counts?.downloaded ?? 0,
       fileUpdateAvailable: counts?.updates ?? 0,
       downloadables: files.map((f) => ({ ...f, localPath: this.downloadLocalOut(f.localPath), archivedPath: null })),
@@ -646,6 +649,7 @@ export class LibraryRepo {
       `SELECT i.item_id AS itemId, i.title AS title, i.shop_name AS shopName, CASE WHEN i.detail_not_found = 1 THEN NULLIF(i.thumbnail_url, '') ELSE i.og_image_url END AS thumbnailUrl,
               i.is_gift AS isGift, i.is_free AS isFree, i.status AS status,
               COUNT(d.downloadable_id) AS fileTotal,
+              SUM(CASE WHEN d.status = 'missing' THEN 1 ELSE 0 END) AS fileExpired,
               SUM(CASE WHEN d.status = 'downloaded' THEN 1 ELSE 0 END) AS fileDownloaded,
               SUM(CASE WHEN d.status = 'update_available' THEN 1 ELSE 0 END) AS fileUpdateAvailable
        FROM items i LEFT JOIN downloadables d ON d.item_id = i.item_id
