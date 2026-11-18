@@ -5,6 +5,7 @@ import type {
   ItemDetailRow,
   CheckProgressEvent,
   CheckSummary,
+  PriceStatsResult,
   RefreshItemResult,
   RemoveItemResult,
   DownloadProgressEvent,
@@ -69,6 +70,7 @@ export interface BoothAPI {
     getItem(id: number): Promise<ItemDetailRow | null>
     getCover(id: number): Promise<{ thumbnailUrl: string | null; localThumb: string | null } | null>
     sync(): Promise<CheckSummary>
+    priceStats(): Promise<PriceStatsResult>
     /** 返回本地缓存图片路径的 app:// URL */
     imageUrl(remoteUrl: string): Promise<string | null>
     imageThumbUrl(remoteUrl: string): Promise<string | null>
@@ -214,6 +216,7 @@ const api: BoothAPI = {
     getItem: (id) => ipcRenderer.invoke('library:getItem', id),
     getCover: (id) => ipcRenderer.invoke('library:getCover', id),
     sync: () => ipcRenderer.invoke('library:sync'),
+    priceStats: () => ipcRenderer.invoke('library:priceStats'),
     imageUrl: (remoteUrl) => ipcRenderer.invoke('library:imageUrl', remoteUrl),
     imageThumbUrl: (remoteUrl) => ipcRenderer.invoke('library:imageThumbUrl', remoteUrl),
     openItemPage: (id) => ipcRenderer.invoke('library:openItemPage', id),

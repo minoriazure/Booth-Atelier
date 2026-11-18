@@ -14,6 +14,7 @@ import { Paths } from './util/paths'
 import { SettingsService } from './services/settingsService'
 import { HistoryManager } from './services/historyManager'
 import { LibrarySyncService } from './services/librarySyncService'
+import { PriceStatsService } from './services/priceStatsService'
 import { UpdateCheckService } from './services/updateCheckService'
 import { DownloadManager } from './services/downloadManager'
 import { StartupService } from './services/startupService'
@@ -46,6 +47,7 @@ export interface AppContext {
   /** 描述内嵌视频下载（yt-dlp） */
   videos: VideoService
   sync: LibrarySyncService
+  prices: PriceStatsService
   checker: UpdateCheckService
   downloads: DownloadManager
   /** 单商品本地删除（DB + 数据目录 + 下载文件移入 deleted） */
@@ -137,7 +139,8 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   history.recoverDeletion()
   const imageLocalizer = new ImageLocalizer(http, repo, paths)
   const videos = new VideoService(repo, paths)
-  const sync = new LibrarySyncService(crawler, itemPage, repo, history, imageLocalizer)
+  const prices = new PriceStatsService(http, repo)
+  const sync = new LibrarySyncService(crawler, itemPage, repo, history, imageLocalizer, prices)
   const downloads = new DownloadManager(deeplink, http, repo, history, paths, jar)
   downloads.setConcurrency(s.downloadConcurrency)
   // ② 恢复上次退出时的排队任务（排队中不回退待下载，自动继续下载）
@@ -177,6 +180,7 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
     imageLocalizer,
     videos,
     sync,
+    prices,
     checker,
     downloads,
     removal,

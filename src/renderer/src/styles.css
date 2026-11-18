@@ -2219,6 +2219,59 @@ button.danger-solid:hover:not(:disabled) {
   max-width: 1280px;
   margin: 0 auto;
 }
+.price-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+}
+.price-summary {
+  margin-bottom: 0;
+}
+.price-totals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.price-total {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  color: var(--text-dim);
+}
+.price-total strong {
+  color: var(--text);
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+.price-error {
+  margin-top: 10px;
+  color: var(--text-dim);
+}
+.price-page .price-table-wrap {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  margin-top: 0;
+}
+.price-table col:nth-child(1) { width: 40%; }
+.price-table col:nth-child(2) { width: 32%; }
+.price-table col:nth-child(n+3) { width: 14%; }
+.price-table th:nth-child(n+3),
+.price-table td.price-amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.price-table td { overflow-wrap: anywhere; }
+.price-amount small {
+  display: block;
+  color: var(--text-dim);
+}
+.price-table .price-empty {
+  padding: 36px 12px;
+  text-align: center;
+  color: var(--text-dim);
+}
 .dl-toolbar {
   display: flex;
   gap: 10px;

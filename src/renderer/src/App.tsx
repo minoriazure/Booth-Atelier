@@ -6,13 +6,14 @@ import LibraryWallPage from './pages/LibraryWallPage'
 import ItemDetailPage from './pages/ItemDetailPage'
 import UpdatesPage from './pages/UpdatesPage'
 import HistoryPage, { type HistoryFocus } from './pages/HistoryPage'
+import PriceStatsPage from './pages/PriceStatsPage'
 import SettingsPage from './pages/SettingsPage'
 import LogPage from './pages/LogPage'
 import AuthExpiredDialog from './components/AuthExpiredDialog'
 import DeepLinkHostDialog from './components/DeepLinkHostDialog'
 import BackToTop from './components/BackToTop'
 
-type Tab = 'library' | 'updates' | 'history' | 'settings' | 'log'
+type Tab = 'library' | 'updates' | 'history' | 'prices' | 'settings' | 'log'
 interface Nav {
   tab: Tab
   detailId: number | null
@@ -30,7 +31,7 @@ export default function App() {
   const [nav, setNav] = useState<{ entries: Nav[]; index: number }>(() => {
     const m = /tab=(\w+)/.exec(window.location.hash)
     const t = m?.[1]
-    const tab: Tab = t === 'updates' || t === 'history' || t === 'settings' || t === 'log' ? t : 'library'
+    const tab: Tab = t === 'updates' || t === 'history' || t === 'prices' || t === 'settings' || t === 'log' ? t : 'library'
     const d = /item=(\d+)/.exec(window.location.hash)
     return { entries: [{ tab, detailId: d ? Number(d[1]) : null }], index: 0 }
   })
@@ -383,6 +384,9 @@ export default function App() {
         <button className={tab === 'history' ? 'active' : ''} onClick={() => navigate({ tab: 'history', detailId: null })}>
           历史
         </button>
+        <button className={tab === 'prices' ? 'active' : ''} onClick={() => navigate({ tab: 'prices', detailId: null })}>
+          价格统计
+        </button>
         <button className={tab === 'settings' ? 'active' : ''} onClick={() => navigate({ tab: 'settings', detailId: null })}>
           设置
         </button>
@@ -416,6 +420,7 @@ export default function App() {
           ))}
         {tab === 'updates' && <UpdatesPage version={libraryVersion} toast={pushToast} onRunCheck={doCheckGlobal} />}
         {tab === 'history' && <HistoryPage version={libraryVersion} onOpen={openDetail} focus={historyFocus} toast={pushToast} />}
+        {tab === 'prices' && <PriceStatsPage syncSummary={lastLibrarySync} />}
         {tab === 'settings' && (
           <SettingsPage
             settings={settings}

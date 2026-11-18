@@ -212,6 +212,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   handle('library:sync', async () => {
     return ctx.sync.sync()
   })
+  handle('library:priceStats', () => ctx.prices.get())
   handle('library:refreshItem', async (itemId: unknown) => {
     const rid = id.parse(itemId)
     if (!ctx.repo.getItemDetail(rid)) throw new Error('本地不存在该商品')

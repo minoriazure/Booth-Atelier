@@ -137,6 +137,28 @@ export interface CheckProgressEvent {
   label?: string
 }
 
+export interface PriceStatsRow {
+  itemId: number
+  title: string
+  variationNames: string[]
+  purchasePrice: number
+  currentPrice: number | null
+  hasMissingCurrentPrice: boolean
+}
+
+export interface PriceStatsSnapshot {
+  updatedAt: string
+  rows: PriceStatsRow[]
+  purchaseTotal: number
+  currentTotal: number | null
+  missingCurrentItems: number
+}
+
+export interface PriceStatsResult {
+  snapshot: PriceStatsSnapshot | null
+  error: string | null
+}
+
 export interface CheckSummary {
   libraryChecked: number
   libraryChanged: number

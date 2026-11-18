@@ -4,6 +4,7 @@ import { metadataHashOf, normalizeHtml } from '../booth/itemPageParser'
 import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { ImageLocalizer } from './imageLocalizer'
+import type { PriceStatsService } from './priceStatsService'
 import { existsSync } from 'fs'
 import { basename } from 'path'
 import type { CheckProgressEvent, CheckSummary, ItemDetail, LibraryItem, LibrarySyncStats, RefreshItemResult } from '../../shared/types'
@@ -30,7 +31,8 @@ export class LibrarySyncService {
     private itemPage: ItemPageParser,
     private repo: LibraryRepo,
     private history: HistoryManager,
-    private images: ImageLocalizer
+    private images: ImageLocalizer,
+    private prices?: PriceStatsService
   ) {}
 
   get isRunning(): boolean {
@@ -218,6 +220,7 @@ export class LibrarySyncService {
       // 增量对账：补入队中断遗留的 pending 图片，并核对已下载图片与派生图文件（后台分页执行，不阻塞同步结束）
       this.images.checkAllImages().catch((e) => log.warn('image check failed:', e instanceof Error ? e.message : e))
 
+      await this.prices?.refresh((label, current, total) => this.onProgress?.({ phase: 'library', current, total, label }))
       if (stats.listFailures === 0) this.repo.setSetting('lastLibrarySyncAt', new Date().toISOString())
       log.info(librarySummary(summary))
       log.info(`下载链接：新商品首次登记 ${stats.newItemLinks} 条，已有商品新增 ${stats.linksAdded} 条，修改 ${stats.linksChanged} 条，移除 ${stats.linksRemoved} 条`)

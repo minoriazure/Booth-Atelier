@@ -19,6 +19,7 @@ export interface HttpResponse {
 
 export interface HttpRequestOptions {
   headers?: Record<string, string>
+  omitCookies?: boolean
   redirect?: 'follow' | 'manual'
   signal?: AbortSignal
   /** GET with Range，用于指纹探测 */
@@ -65,7 +66,7 @@ export class NodeHttpClient implements HttpClient {
 
   async request(url: string, method: string, opts: HttpRequestOptions = {}): Promise<HttpResponse> {
     await this.limiter.wait()
-    const cookie = await this.cookieJar.cookieHeader(url)
+    const cookie = opts.omitCookies ? '' : await this.cookieJar.cookieHeader(url)
     const { referer: refererOpt, ...restHeaders } = opts.headers ?? {}
     const headers: Record<string, string> = {
       'user-agent': USER_AGENT,
