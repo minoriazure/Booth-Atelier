@@ -70,7 +70,7 @@ async function main() {
     // 5) 设置拆分
     console.log('\n=== 5. 设置拆分 ===')
     const settings = ctx.settings.get()
-    console.log(`autoSyncLibraryOnStartup=${settings.autoSyncLibraryOnStartup}, autoCheckFilesOnStartup=${settings.autoCheckFilesOnStartup}`)
+    console.log(`autoSyncLibraryOnStartup=${settings.autoSyncLibraryOnStartup}, autoForceCheckFilesOnStartup=${settings.autoForceCheckFilesOnStartup}`)
 
     console.log('\n✓ M4 验证通过')
   } finally {

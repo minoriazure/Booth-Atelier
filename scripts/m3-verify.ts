@@ -27,8 +27,7 @@ async function main() {
     if (items.length < 30) throw new Error('同步商品数异常')
 
     // ── 2. 全局指纹检查（只查不下） ──
-    console.log('\n=== 2. 全局指纹检查（autoDownloadUpdates 暂关） ===')
-    ctx.settings.set({ autoDownloadUpdates: false })
+    console.log('\n=== 2. 全局指纹检查（只查不下） ===')
     const t0 = Date.now()
     const checkSummary = await ctx.checker.checkGlobal()
     console.log(`check: ${JSON.stringify(checkSummary)} 耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`)
@@ -55,14 +54,13 @@ async function main() {
       if (!ok) throw new Error(`文件未落地: ${f.filename}`)
     }
 
-    // ── 4. 模拟更新：改 DB 指纹 → 检查 → 自动下载 → 旧文件归档 ──
+    // ── 4. 模拟更新：改 DB 指纹 → 检查 → 下载更新 → 旧文件归档 ──
     console.log('\n=== 4. 模拟更新检测 ===')
-    ctx.settings.set({ autoDownloadUpdates: true })
     const f0 = after.downloadables[0]
     // 记录当前文件路径与内容特征
     const curPath = f0.localPath!
     const beforeSize = statSync(curPath).size
-    // 篡改指纹为错误值 → 检查时会发现真实指纹不同 → update_available → 自动下载
+    // 篡改指纹为错误值，检查后下载这个更新文件。
     ctx.repo.run('UPDATE downloadables SET last_etag = ?, last_size = ? WHERE downloadable_id = ?', [
       'SIMULATED_ETAG',
       1,
@@ -70,6 +68,9 @@ async function main() {
     ])
     const check2 = await ctx.checker.checkItem(target.itemId)
     console.log('check2:', JSON.stringify(check2))
+    if (ctx.repo.getDownloadable(f0.downloadableId)?.status === 'update_available') {
+      ctx.downloads.enqueue(f0.downloadableId, 'update')
+    }
     await waitForQueue(ctx)
 
     const after2 = ctx.repo.getItemDetail(target.itemId)!

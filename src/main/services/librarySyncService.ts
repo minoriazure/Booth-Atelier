@@ -1,19 +1,24 @@
-import type { LibraryCrawler } from '../booth/libraryCrawler'
+import type { LibraryCrawler, ScopedLibraryItem } from '../booth/libraryCrawler'
 import type { ItemPageParser } from '../booth/itemPageParser'
 import { metadataHashOf, normalizeHtml } from '../booth/itemPageParser'
 import type { LibraryRepo } from '../db/repos'
 import type { HistoryManager } from './historyManager'
 import type { ImageLocalizer } from './imageLocalizer'
 import type { PriceStatsService } from './priceStatsService'
-import { existsSync } from 'fs'
-import { basename } from 'path'
+import type { ItemMetadataChecks } from './itemMetadataChecks'
+import type { ItemFileUpdates } from './itemFileUpdates'
+import type { ReadBoothItem } from '../booth/itemApi'
+import { retireMissingDownloadLinks } from './libraryDownloadLinks'
 import type { CheckProgressEvent, CheckSummary, ItemDetail, LibraryItem, LibrarySyncStats, RefreshItemResult } from '../../shared/types'
 import { librarySummary } from '../../shared/librarySyncSummary'
-import { localDate } from '../util/filenames'
 import { BoothError, isAuthError } from '../booth/errors'
-import { createLogger, describeLink } from '../util/log'
+import { createLogger } from '../util/log'
 
 const log = createLogger('librarySync')
+const noDetailChange: RefreshItemResult = {
+  changed: false, titleChanged: false, coverChanged: false, galleryChanged: false,
+  galleryAdded: 0, galleryRemoved: 0, descriptionChanged: false, snapshotSaved: false, imagesPending: 0
+}
 
 /**
  * 库元数据同步（用户需求 #3 的"库更新"，与文件更新完全独立）：
@@ -23,6 +28,8 @@ const log = createLogger('librarySync')
  */
 export class LibrarySyncService {
   private running = false
+  private stopped = false
+  private detailRefreshes = new Map<number, Promise<RefreshItemResult>>()
 
   onProgress: ((e: CheckProgressEvent) => void) | null = null
 
@@ -32,15 +39,40 @@ export class LibrarySyncService {
     private repo: LibraryRepo,
     private history: HistoryManager,
     private images: ImageLocalizer,
-    private prices?: PriceStatsService
+    private prices?: PriceStatsService,
+    private metadataChecks?: ItemMetadataChecks,
+    private fileUpdates?: ItemFileUpdates
   ) {}
 
   get isRunning(): boolean {
     return this.running
   }
 
-  async sync(): Promise<CheckSummary> {
-    if (this.running) throw new Error('同步已在进行中')
+  hasItems(): boolean {
+    return this.repo.listAllItemIds().length > 0
+  }
+
+  stop(): void {
+    this.stopped = true
+    this.metadataChecks?.stop()
+  }
+
+  pollItemMetadataOnStartup(
+    intervalHours: number,
+    onItemRead?: (itemId: number, data: Awaited<ReturnType<ReadBoothItem>> | null) => void | Promise<void>,
+    onProgress?: (event: CheckProgressEvent) => void
+  ): Promise<boolean> {
+    return this.metadataChecks?.pollOnStartup(intervalHours, (itemId) => this.refreshItem(itemId), onItemRead, onProgress) ?? Promise.resolve(false)
+  }
+
+  async checkItemMetadata(itemId: number): Promise<RefreshItemResult> {
+    if (!this.metadataChecks) return this.refreshItem(itemId)
+    const result = await this.metadataChecks.checkManually(itemId, (id) => this.refreshItem(id))
+    return result ?? { ...noDetailChange, skippedHtml: true }
+  }
+
+  async sync(verifiedItems?: Map<number, ScopedLibraryItem>): Promise<CheckSummary> {
+    if (this.running || this.fileUpdates?.isRunning) throw new Error('库同步或商品文件核对已在进行中')
     this.running = true
     log.info('library sync start')
     const summary: CheckSummary = { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
@@ -55,18 +87,28 @@ export class LibrarySyncService {
       // 1) 列表页
       this.onProgress?.({ phase: 'library', current: 0, total: 0, label: '抓取库列表…' })
       const knownIds = new Set(this.dbAllItemIds())
+      const initialRead = !knownIds.size || !this.repo.getSetting<string | null>('lastLibrarySyncAt', null)
+        ? this.metadataChecks?.batchReader() : undefined
+      const initialDetails: number[] = []
+      const fileBaselines = new Set<number>()
       const items = new Map<number, LibraryItem>()
+      const verifiedLists = new Map<string, LibraryItem[]>()
       const kinds: Array<'library' | 'gifts'> = ['library', 'gifts']
       for (const kind of kinds) {
         this.onProgress?.({ phase: 'library', current: 0, total: 0, label: kind === 'library' ? '抓取购买库…' : '抓取赠送库…' })
         try {
           const listed = await this.crawler.crawlKind(kind, (_k, page, count) => {
             log.info(`[${kind}] page ${page}: ${count} items`)
-          })
+          }, verifiedItems ? (list) => verifiedLists.set(kind, list) : undefined)
           for (const item of listed) {
             const previous = items.get(item.itemId)
             if (!previous) items.set(item.itemId, item)
             else {
+              previous.downloadablesIncomplete ||= item.downloadablesIncomplete
+              if (kind === 'library') {
+                previous.purchasedVariationIds = previous.purchasedVariationIds && item.purchasedVariationIds
+                  ? [...new Set([...previous.purchasedVariationIds, ...item.purchasedVariationIds])] : undefined
+              }
               const links = new Map(previous.downloadables.map((link) => [link.downloadableId, link]))
               for (const link of item.downloadables) {
                 if (!links.has(link.downloadableId)) links.set(link.downloadableId, link)
@@ -83,10 +125,22 @@ export class LibrarySyncService {
           log.warn(`[${kind}] list fetch failed: ${reason}`)
         }
       }
+      const verifiedPurchases = verifiedLists.get('library')
+      const verifiedGifts = verifiedLists.get('gifts')
+      if (verifiedItems && verifiedPurchases && verifiedGifts && stats.listFailures === 0) {
+        for (const [kind, list] of [['purchases', verifiedPurchases], ['gifts', verifiedGifts]] as const) {
+          for (const item of list) {
+            const actual = verifiedItems.get(item.itemId) ?? { purchases: [], gifts: [] }
+            actual[kind].push(...item.verifiedDownloadables ?? [])
+            verifiedItems.set(item.itemId, actual)
+          }
+        }
+      }
 
       const seen = new Set(items.keys())
       const fetchedLinks = new Set<number>()
       const crawledDl = new Map<number, Set<number>>()
+      let incompleteDownloadLists = 0
       let processed = 0
       for (const item of items.values()) {
         if (++processed % 100 === 0) await new Promise<void>((done) => setImmediate(done))
@@ -95,11 +149,20 @@ export class LibrarySyncService {
           stats.added++
           stats.changes.push({ itemId: item.itemId, label: `新增商品：${item.title}` })
         }
+        if (item.downloadablesIncomplete) {
+          incompleteDownloadLists++
+          summary.failed++
+          stats.issues.push({ itemId: item.itemId, source: '库下载列表', reason: '下载项不完整，已保留原下载链接' })
+        }
         const links = new Map(item.downloadables.map((link) => [link.downloadableId, link]))
+        const addedDownloadIds: number[] = []
         for (const link of links.values()) {
           if (fetchedLinks.has(link.downloadableId)) continue
           fetchedLinks.add(link.downloadableId)
           const old = this.repo.getDownloadable(link.downloadableId)
+          if (!isNew && stats.listFailures === 0 && (!old || old.status === 'missing')) {
+            addedDownloadIds.push(link.downloadableId)
+          }
           if (isNew) stats.newItemLinks++
           else if (!old) {
             stats.linksAdded++
@@ -114,6 +177,10 @@ export class LibrarySyncService {
         }
         crawledDl.set(item.itemId, new Set(links.keys()))
         this.repo.upsertFromList({ ...item, downloadables: [...links.values()] })
+        if (item.purchasedVariationIds && stats.listFailures === 0) {
+          this.fileUpdates?.rememberPurchases(item.itemId, item.purchasedVariationIds, addedDownloadIds)
+          if (this.fileUpdates?.needsBaseline(item.itemId)) fileBaselines.add(item.itemId)
+        }
         if (item.thumbnailUrl) stats.imagesPending += this.images.registerItemImages(item.itemId, [{ url: item.thumbnailUrl, kind: 'thumb' }]) ?? 0
       }
       summary.libraryChecked = seen.size
@@ -135,39 +202,19 @@ export class LibrarySyncService {
       //     老文件立即归档到历史 + 链接标失效；新文件已在待下载。（只在该商品列表解析成功时才判定，防解析故障误伤）
       let vanished = 0
       for (const [itemId, keep] of crawledDl) {
-        if (stats.listFailures > 0 || keep.size === 0) continue // 列表解析异常，跳过判定
+        if (stats.listFailures > 0 || items.get(itemId)?.downloadablesIncomplete || keep.size === 0) continue
         const dbRows = this.repo.listDownloadablesOfItem(itemId)
         const knownLinks = new Set(dbRows.map((r) => r.downloadableId))
         for (const d of keep) {
           if (!knownLinks.has(d)) log.info(`new link on existing item: link=#${d} item=#${itemId}`)
         }
-        for (const row of dbRows) {
-          if (row.status === 'missing' || keep.has(row.downloadableId)) continue
-          const desc = describeLink(row)
-          if (row.localPath && existsSync(row.localPath)) {
-            const archived = this.history.archivePath(itemId, row.localPath)
-            if (archived) {
-              this.repo.addFileHistory({
-                itemId,
-                downloadableId: row.downloadableId,
-                date: localDate(),
-                archivedPath: archived,
-                filename: basename(archived),
-                etag: row.lastEtag,
-                size: row.lastSize
-              })
-              log.info(`vanished link (old file archived): ${desc} → ${archived}`)
-            }
-          } else {
-            log.info(`vanished link (no local file): ${desc}`)
-          }
-          this.repo.setStatus(row.downloadableId, 'missing')
-          this.repo.run('UPDATE downloadables SET local_path = NULL, local_size = NULL WHERE downloadable_id = ?', [row.downloadableId])
+        for (const downloadableId of retireMissingDownloadLinks(this.repo, this.history, itemId, keep)) {
           vanished++
-          stats.changes.push({ itemId, label: `移除下载链接 #${row.downloadableId}` })
+          stats.changes.push({ itemId, label: `移除下载链接 #${downloadableId}` })
         }
       }
       stats.linksRemoved = vanished
+      stats.listFailures += incompleteDownloadLists
       if (vanished > 0) log.info(`vanished downloadables archived: ${vanished}`)
 
       // 3) 完整检查本轮库内商品及本地免费商品。
@@ -178,9 +225,16 @@ export class LibrarySyncService {
         if (i > 0 && i % 25 === 0) await new Promise<void>((done) => setImmediate(done))
         const itemId = detailTargets[i]
         this.onProgress?.({ phase: 'library', current: i + 1, total: detailTargets.length, label: `商品详情 ${itemId}` })
+        // 初次建档并行取得 API 基线，HTML 仍由原路径直接刷新。
+        if (initialRead) void initialRead(itemId).catch(() => {})
         try {
-          const detail = await this.itemPage.fetch(itemId)
-          const result = this.applyDetail(itemId, detail)
+          const result = await this.refreshItem(itemId)
+          if (result.notFound) {
+            stats.notFound++
+            stats.issues.push({ itemId, source: '详情页 404', reason: `商品 ${itemId} 不存在或已下架` })
+            continue
+          }
+          if (initialRead) initialDetails.push(itemId)
           stats.detailsChecked++
           stats.imagesPending += result.imagesPending
           if (knownIds.has(itemId)) {
@@ -202,13 +256,6 @@ export class LibrarySyncService {
           if (isAuthError(e)) throw e
           const title = this.repo.getItemTitle(itemId)
           const itemDesc = `item=#${itemId}「${title.slice(0, 40)}」`
-          if (e instanceof BoothError && e.kind === 'not_found') {
-            this.repo.markDetailNotFound(itemId)
-            stats.notFound++
-            stats.issues.push({ itemId, source: '详情页 404', reason: e.message })
-            log.info(`${itemDesc} not found on BOOTH (404), marked missing`)
-            continue
-          }
           const status = e instanceof BoothError && e.status != null ? ` http=${e.status}` : ''
           log.warn(`detail fetch failed: ${itemDesc}${status} → ${e instanceof Error ? e.message : e}`)
           stats.detailFailures++
@@ -220,8 +267,23 @@ export class LibrarySyncService {
       // 增量对账：补入队中断遗留的 pending 图片，并核对已下载图片与派生图文件（后台分页执行，不阻塞同步结束）
       this.images.checkAllImages().catch((e) => log.warn('image check failed:', e instanceof Error ? e.message : e))
 
-      await this.prices?.refresh((label, current, total) => this.onProgress?.({ phase: 'library', current, total, label }))
-      if (stats.listFailures === 0) this.repo.setSetting('lastLibrarySyncAt', new Date().toISOString())
+      const fileBaselineRead = !initialRead && fileBaselines.size
+        ? this.metadataChecks?.batchReader((id) => fileBaselines.has(id)) : undefined
+      await this.prices?.refresh((label, current, total) => this.onProgress?.({ phase: 'library', current, total, label }),
+        initialRead ?? fileBaselineRead)
+      if (initialRead) await this.metadataChecks?.seedAfterSync(initialDetails, initialRead)
+      const readBaseline = initialRead ?? fileBaselineRead
+      if (readBaseline) {
+        for (const id of fileBaselines) {
+          await readBaseline(id).catch((error) => log.warn(`商品 #${id} 的 API 文件基线建立失败：`, error))
+        }
+      }
+      if (stats.listFailures === 0) {
+        const now = new Date().toISOString()
+        const lastSync = this.repo.getSetting<string | null>('lastLibrarySyncAt', null)
+        if (!this.repo.getSetting('firstLibrarySyncAt', null)) this.repo.setSetting('firstLibrarySyncAt', lastSync ?? now)
+        this.repo.setSetting('lastLibrarySyncAt', now)
+      }
       log.info(librarySummary(summary))
       log.info(`下载链接：新商品首次登记 ${stats.newItemLinks} 条，已有商品新增 ${stats.linksAdded} 条，修改 ${stats.linksChanged} 条，移除 ${stats.linksRemoved} 条`)
       for (const issue of stats.issues) {
@@ -231,6 +293,7 @@ export class LibrarySyncService {
       return summary
     } finally {
       this.running = false
+      this.onProgress?.({ phase: 'library', current: 0, total: 0 })
     }
   }
 
@@ -260,20 +323,29 @@ export class LibrarySyncService {
    * 返回元数据是否有变化；抓取失败直接抛出。
    */
   async refreshItem(itemId: number): Promise<RefreshItemResult> {
+    const existing = this.detailRefreshes.get(itemId)
+    if (existing) return existing
+    const request = this.fetchAndApplyDetail(itemId)
+    this.detailRefreshes.set(itemId, request)
+    try {
+      return await request
+    } finally {
+      this.detailRefreshes.delete(itemId)
+    }
+  }
+
+  private async fetchAndApplyDetail(itemId: number): Promise<RefreshItemResult> {
     try {
       const detail = await this.itemPage.fetch(itemId)
+      if (this.stopped || !this.repo.getItemMetadataCheck(itemId)) throw new Error(`商品 ${itemId} 已离开资源库`)
       const result = this.applyDetail(itemId, detail)
       log.info(`refreshItem ${itemId}: ${JSON.stringify(result)}`)
       return result
     } catch (e) {
       if (!(e instanceof BoothError) || e.kind !== 'not_found') throw e
-      this.repo.markDetailNotFound(itemId)
+      if (!this.stopped) this.repo.markDetailNotFound(itemId)
       log.info(`refreshItem ${itemId}: not found on BOOTH (404)`)
-      return {
-        changed: false, titleChanged: false, coverChanged: false, galleryChanged: false,
-        galleryAdded: 0, galleryRemoved: 0, descriptionChanged: false, snapshotSaved: false,
-        imagesPending: 0, notFound: true
-      }
+      return { ...noDetailChange, notFound: true }
     }
   }
 

@@ -34,6 +34,10 @@ export class ItemPageParser {
 
 export function parseItemPage(html: string, itemId: number): ItemDetail {
   const $ = cheerio.load(html)
+  const ageGate = $('h1').toArray().some((heading) => /^(年龄确认|年齡確認|年齢確認|age (?:verification|confirmation))$/i.test($(heading).text().trim()))
+  if (ageGate && !$('.js-market-item-detail-description').length) {
+    throw new BoothError(`商品 ${itemId} 返回了年龄确认页，请检查 BOOTH Cookie`, 'parse')
+  }
 
   const ogTitle = $('meta[property="og:title"]').attr('content')?.trim() || ''
   const ogImage = $('meta[property="og:image"]').attr('content')?.trim() || null

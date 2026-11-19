@@ -1,6 +1,8 @@
 import * as cheerio from 'cheerio'
 import type { PriceStatsResult, PriceStatsRow, PriceStatsSnapshot } from '../../shared/types'
 import { sniffAuthFailure, type HttpClient } from '../booth/httpClient'
+import { BoothError } from '../booth/errors'
+import { fetchBoothItem, type ReadBoothItem } from '../booth/itemApi'
 import type { LibraryRepo } from '../db/repos'
 import { createLogger } from '../util/log'
 
@@ -102,7 +104,8 @@ export class PriceStatsService {
     return { snapshot: this.repo.getSetting<PriceStatsSnapshot | null>(snapshotKey, null), error: this.error }
   }
 
-  async refresh(onProgress: (label: string, current: number, total: number) => void): Promise<void> {
+  async refresh(onProgress: (label: string, current: number, total: number) => void,
+    readItem: ReadBoothItem = (itemId) => fetchBoothItem(this.http, itemId)): Promise<void> {
     try {
       const paths = await this.listOrders(onProgress)
       const byItem = new Map<number, OrderLine[]>()
@@ -122,11 +125,12 @@ export class PriceStatsService {
         let market: MarketItem | null = null
         if (!rateLimited) {
           try {
-            const result = await this.fetchMarketItem(itemId)
-            market = result.item
-            rateLimited = result.rateLimited
+            market = this.marketItem(await readItem(itemId))
           } catch (error) {
-            log.warn(`读取商品 #${itemId} 现价失败：${error instanceof Error ? error.message : String(error)}`)
+            rateLimited = error instanceof BoothError && error.kind === 'rate_limited'
+            if (!(error instanceof BoothError && error.kind === 'not_found')) {
+              log.warn(`读取商品 #${itemId} 现价失败：${error instanceof Error ? error.message : String(error)}`)
+            }
           }
         }
         const orderTitle = splitOrderTitle(lines[0].orderTitle)
@@ -194,17 +198,8 @@ export class PriceStatsService {
     return html
   }
 
-  private async fetchMarketItem(itemId: number): Promise<{ item: MarketItem | null; rateLimited: boolean }> {
-    const response = await this.http.request(`https://api.booth.pm/vroid/items/${itemId}`, 'GET', {
-      omitCookies: true, headers: { accept: 'application/json', referer: '' }
-    })
-    if (response.status === 404) return { item: null, rateLimited: false }
-    if (response.status === 429 || response.status === 403) return { item: null, rateLimited: true }
-    if (response.status !== 200) throw new Error(`HTTP ${response.status}`)
-    const data = JSON.parse(await response.text())
-    if (data?.id !== itemId || typeof data.name !== 'string' || !Array.isArray(data.variations)) {
-      throw new Error('商品 API 响应结构异常')
-    }
+  private marketItem(data: Awaited<ReturnType<ReadBoothItem>>): MarketItem {
+    if (!Array.isArray(data.variations)) throw new Error('商品 API 响应结构异常')
     const variations: MarketItem['variations'] = new Map()
     for (const v of data.variations) {
       if (!Number.isSafeInteger(v?.id)) continue
@@ -213,6 +208,6 @@ export class PriceStatsService {
         price: Number.isSafeInteger(v.price) && v.price >= 0 ? v.price : null
       })
     }
-    return { item: { title: data.name, variations }, rateLimited: false }
+    return { title: data.name, variations }
   }
 }

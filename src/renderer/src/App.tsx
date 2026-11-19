@@ -122,6 +122,8 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [progress, setProgress] = useState<CheckProgressEvent | null>(null)
+  const [apiProgress, setApiProgress] = useState<CheckProgressEvent | null>(null)
+  const [checkingApiFiles, setCheckingApiFiles] = useState(false)
   const [libraryVersion, setLibraryVersion] = useState(0) // 变化时触发子页面刷新
   /** 最近一次完成的确认（底栏最下行，状态确认用） */
   const [lastCompleted, setLastCompleted] = useState<string | null>(null)
@@ -229,14 +231,18 @@ export default function App() {
           setLastCompleted(message)
           pushToast(summary.library.issues.length ? 'warn' : 'info', message)
         } else {
-          setLastCompleted(`文件检查完成：检查 ${summary.filesChecked} 个链接，发现 ${summary.filesUpdated} 个更新`)
+          const status = summary.filesRemaining ? `，${summary.filesRemaining} 个链接待续查` : ''
+          setLastCompleted(`文件检查：已检查 ${summary.filesChecked} 个链接，发现 ${summary.filesUpdated} 个更新${status}`)
         }
         setLibraryVersion((v) => v + 1)
         setProgress(null)
       }),
+      api.events.onLibraryMetadataChanged(() => setLibraryVersion((v) => v + 1)),
+      api.events.onItemFileUpdatesChanged(() => setLibraryVersion((v) => v + 1)),
       api.events.onCheckProgress((e) => {
         // 下载进度不进底栏（更新与下载页有行内进度），只处理检查/同步
-        if (e.phase !== 'download') setProgress(e)
+        if (e.phase === 'item-api') setApiProgress(e.total > 0 ? e : null)
+        else if (e.phase !== 'download') setProgress(e.total > 0 || e.label ? e : null)
       }),
       api.events.onDownloadDone(() => setLibraryVersion((v) => v + 1)),
       api.events.onDownloadError((e) => {
@@ -301,10 +307,11 @@ export default function App() {
       try {
         const s = await fn()
         if (s.library) setLastLibrarySync(s)
+        const remaining = s.filesRemaining ? `，${s.filesRemaining} 个链接待续查` : ''
         const message = s.library ? librarySummary(s)
-          : `${label}完成：检查 ${s.filesChecked} 个链接，发现 ${s.filesUpdated} 个更新，入队 ${s.downloaded} 个，失败 ${s.failed} 个`
+          : `${label}：已检查 ${s.filesChecked} 个链接，发现 ${s.filesUpdated} 个更新，入队 ${s.downloaded} 个，失败 ${s.failed} 个${remaining}`
         setLastCompleted(message)
-        pushToast(s.failed || s.library?.notFound ? 'warn' : 'info', message)
+        pushToast(s.failed || s.filesRemaining || s.library?.notFound ? 'warn' : 'info', message)
         setAuthOk(true)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -328,8 +335,19 @@ export default function App() {
 
   const doSync = useCallback(() => runCheck(() => api.library.sync(), '库同步'), [runCheck])
   const doCheckGlobal = useCallback(() => runCheck(() => api.updates.checkGlobal(), '全局更新检查'), [runCheck])
+  const doCheckApiFiles = async (): Promise<void> => {
+    setCheckingApiFiles(true)
+    try {
+      await api.updates.checkApiFiles()
+    } catch (error) {
+      pushToast('error', `文件更新检查失败：${error instanceof Error ? error.message : error}`)
+    } finally {
+      setCheckingApiFiles(false)
+    }
+  }
 
   if (!settings) return <div className="empty">加载中…</div>
+  const checkBusy = progress !== null || apiProgress !== null || checkingApiFiles
 
   return (
     <div className="app">
@@ -337,11 +355,11 @@ export default function App() {
         <div className="logo">
           Booth <span>Atelier</span>
         </div>
-        <button onClick={doSync} disabled={progress !== null} title="拉取商品库最新信息（简介、宣传图、新增商品）">
+        <button onClick={doSync} disabled={checkBusy} title="拉取商品库最新信息（简介、宣传图、新增商品）">
           同步库
         </button>
-        <button onClick={doCheckGlobal} disabled={progress !== null} title="检查所有商品所有下载链接的文件更新，发现即自动下载">
-          检查全部下载文件更新
+        <button onClick={() => void doCheckApiFiles()} disabled={checkBusy} title="通过 BOOTH 商品 API 检查文件变化并核对购买库">
+          {checkingApiFiles || apiProgress ? '检查文件更新中…' : '检查文件更新'}
         </button>
         <button
           className="primary"
@@ -418,7 +436,7 @@ export default function App() {
               onOpenHistory={openHistoryFor}
             />
           ))}
-        {tab === 'updates' && <UpdatesPage version={libraryVersion} toast={pushToast} onRunCheck={doCheckGlobal} />}
+        {tab === 'updates' && <UpdatesPage version={libraryVersion} toast={pushToast} onRunCheck={doCheckGlobal} checkBusy={checkBusy} />}
         {tab === 'history' && <HistoryPage version={libraryVersion} onOpen={openDetail} focus={historyFocus} toast={pushToast} />}
         {tab === 'prices' && <PriceStatsPage syncSummary={lastLibrarySync} />}
         {tab === 'settings' && (
@@ -435,24 +453,27 @@ export default function App() {
 
       <div className="statusbar-stack">
         {/* 活跃进度：每种一行，同时出现时向上堆叠；完成即整行消失 */}
-        {progress && (
-          <div className="status-line active">
-            <span className="status-label">
-              {progress.phase === 'library' ? '📦 同步商品库' : '🔍 检查文件更新'}
-              {progress.label ? `：${progress.label}` : ''}
-            </span>
-            {progress.total > 0 && (
-              <>
-                <div className="progressbar">
-                  <div style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }} />
-                </div>
-                <span className="status-num">
-                  {progress.current}/{progress.total}
-                </span>
-              </>
-            )}
-          </div>
-        )}
+        {[progress, apiProgress].map((check) => {
+          if (!check) return null
+          const label = check.phase === 'library' ? '同步商品库'
+            : check.phase === 'item-api' ? 'API 检查文件更新' : '检查文件更新'
+          return (
+            <div className="status-line active" key={check.phase}>
+              <span className="status-label">
+                {check.phase === 'library' ? '📦' : '🔍'} {label}
+                {check.label ? `：${check.label}` : ''}
+              </span>
+              {check.total > 0 && (
+                <>
+                  <div className="progressbar" role="progressbar" aria-label={label} aria-valuenow={check.current} aria-valuemax={check.total}>
+                    <div style={{ width: `${Math.min(100, (check.current / check.total) * 100)}%` }} />
+                  </div>
+                  <span className="status-num">{check.current}/{check.total}</span>
+                </>
+              )}
+            </div>
+          )
+        })}
         {imgProgress && imgProgress.total > 0 && imgProgress.done < imgProgress.total && (
           <div className="status-line active">
             <span className="status-label">🖼 图片下载</span>

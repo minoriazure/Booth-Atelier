@@ -21,6 +21,7 @@ src/main/
   booth/
     systemFetch.ts    网络层唯一出口（见下文「网络层」）
     httpClient.ts     限速、Referer 策略、重定向处理
+    itemApi.ts        匿名 BOOTH 商品 API 客户端
     deeplink.ts       deeplink 解析（302 → Location）与指纹探测（Range）
     cookieJar.ts      Netscape Cookie 解析、热加载与路径切换（仅内存，不落盘）
   db/                 sql.js 封装、迁移脚本、查询
@@ -32,6 +33,13 @@ src/renderer/src/
   pages/              资源库、商品详情、更新与下载、历史、设置
 scripts/              验证脚本与便携版打包脚本
 ```
+
+## 商品详情与文件更新
+
+- `ItemMetadataChecks` 在启动时按商品判断 API 检查间隔，默认 2 小时。每个到期商品的响应同时交给详情和文件检查。详情比较标题、简介、视频标识和画廊图片 ID，变化后由 `LibrarySyncService` 刷新商品 HTML。首次库同步复用 API 响应建立基线和读取现价。手动详情检查失败时回退到 HTML，并保持启动扫描的独立计时。
+- `ItemFileUpdates` 按商品和已购变体比较完整文件名及文件级 `updated_at`。确认变化后使用同轮已验证的购买与赠送库清单，或通过 `LibraryCrawler` 的按商品搜索补查。实际库负责提供 `downloadableId`，用于入库、下载、失效判定和归档。部分查询结果会保留原链接，完整结果确认不一致时才记录商品级 API 异常。
+- `StartupService` 按「库同步 → API 检查 → 全量指纹检查」编排到期任务。空库首启在同步时建立基线，首次自动全量检查从成功同步起算。API 和全量检查共享同轮指纹探测结果，分别判断自动下载资格，按下载 ID 合并入队。
+- `UpdateCheckService` 比较 ETag 和文件大小，保留未完成的全量检查范围，以及中断前已确认的自动下载任务。API 待核对项保存旧指纹，使全量检查先完成时仍能辨别更新来源。网络探测结束后重新核对本地下载状态，避免把刚下载的新版当成旧文件归档。
 
 ## 下载管线
 
@@ -49,6 +57,7 @@ scripts/              验证脚本与便携版打包脚本
 
 - 不落盘，无 HTTP 缓存，`credentials: 'omit'`，不使用会话 cookie。
 - 请求中唯一的 Cookie 来源是 Cookie 文件注入的显式请求头。这是「拷贝程序到别处不会带走登录态」的实现基础，**不要改回 `defaultSession`**。
+- 商品 API 请求使用 `omitCookies`。购买库和实际下载仍走各自的授权路径。
 - 自动遵循代理三档设置（系统 / 自定义 / 直连）。
 
 ### 已知的 Electron 行为约束
@@ -98,7 +107,7 @@ GET https://booth.pm/downloadables/{id}/deeplink?client=booth-library-manager&va
 ## 数据库
 
 - 位于 `{dataDir}/library.db`，使用 sql.js 的 WASM 实现。
-- 当前 schema 为012：006队列、007免费商品、008/009派生图状态、010远程画廊移除、011标签、012快照文件关联。升级前轮换保留3份 `library.db.backup-N`；迁移在事务内完成，提交后落盘，失败保留原文件。损坏库不会被空库覆盖。
+- 当前结构版本为 017。016 增加商品详情 API 哈希和检查时间，017 增加商品文件检查状态。全量检查的尝试时间、完成时间、待续查链接和待自动入队文件保存在设置表。升级前轮换保留 3 份 `library.db.backup-N`，损坏的库文件会被保留。
 - sql.js 没有 FTS5，搜索使用 `LIKE`。
 - 自动flush最小间隔5秒、最长脏龄15秒；显式flush/close可强制落盘。批量写走事务，禁止在事务内export。
 

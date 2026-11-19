@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import type { DownloadInventory, DownloadStats, FileListRow } from '../../../shared/types'
+import type { DownloadInventory, DownloadStats, FileListRow, ItemFileUpdateStatus } from '../../../shared/types'
 import { api } from '../api'
 import { EXPIRED_FILE_MISSING, EXPIRED_FILE_PRESENT } from '../components/expiredFileStatus'
 import { compareDownloadFilenames } from '../components/compareDownloadFilenames'
@@ -141,20 +141,25 @@ function groupSummary(files: FileListRow[], progressMap: Map<number, Progress>) 
 export default function UpdatesPage({
   version,
   toast,
-  onRunCheck
+  onRunCheck,
+  checkBusy = false
 }: {
   version: number
   toast: ToastFn
   onRunCheck: () => void
+  checkBusy?: boolean
 }) {
   const [rows, setRows] = useState<FileListRow[]>([])
   const [inventory, setInventory] = useState<DownloadInventory>({ items: 0, files: 0, freeItems: 0, freeFiles: 0 })
   const [stats, setStats] = useState<DownloadStats>({ queued: 0, active: 0, paused: false, userPaused: false })
   const [progressMap, setProgressMap] = useState<Map<number, Progress>>(new Map())
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [expandedUpdates, setExpandedUpdates] = useState<Set<number>>(new Set())
   const [filter, setFilter] = useState('all')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const [itemFileStatuses, setItemFileStatuses] = useState<ItemFileUpdateStatus[]>([])
+  const [retryingId, setRetryingId] = useState<number | null>(null)
 
   // ── 列宽拖拽（Windows 资源管理器语义） ──
   // 关键：每一列都是显式像素宽（无 auto 吸收），拖动分界线 = 只改分界线左侧那一列的宽度，
@@ -229,10 +234,13 @@ export default function UpdatesPage({
   }, [resizing])
 
   const load = useCallback(async () => {
-    const [list, st, totals] = await Promise.all([api.downloads.list(), api.downloads.stats(), api.downloads.inventory()])
+    const [list, st, totals, itemStatuses] = await Promise.all([
+      api.downloads.list(), api.downloads.stats(), api.downloads.inventory(), api.updates.itemFileStatuses()
+    ])
     setRows(list)
     setStats(st)
     setInventory(totals)
+    setItemFileStatuses(itemStatuses)
     setProgressMap(new Map(list.flatMap((row) => row.progress ? [[row.downloadableId, row.progress] as const] : [])))
   }, [])
 
@@ -326,12 +334,19 @@ export default function UpdatesPage({
     return byItem
   }, [rows])
 
+  const updateGroups = useMemo(() => Array.from(filesByItem.values(), (files) =>
+    files.filter((file) => file.status === 'update_available').sort(compareDownloadFilenames)
+  ).filter((files) => files.length > 0), [filesByItem])
+  const updateCount = updateGroups.reduce((sum, files) => sum + files.length, 0)
+  const canStartUpdates = updateGroups.some((files) => files.some((file) => viewStatusOf(file) === 'update'))
+
   const redownloadableItems = useMemo(() => new Set(rows
     .filter((row) => row.status !== 'missing' && (!row.active || row.inQueue))
     .map((row) => row.itemId)), [rows])
 
-  const toggleGroup = (itemId: number): void => {
-    setExpanded((prev) => {
+  const toggleGroup = (itemId: number, updatesOnly: boolean): void => {
+    const update = updatesOnly ? setExpandedUpdates : setExpanded
+    update((prev) => {
       const next = new Set(prev)
       if (next.has(itemId)) next.delete(itemId)
       else next.add(itemId)
@@ -424,11 +439,151 @@ export default function UpdatesPage({
     await load()
   }
 
+  const queueUpdates = async (start: () => Promise<number>): Promise<void> => {
+    try {
+      const count = await start()
+      toast('info', count ? `已将 ${count} 个更新文件加入下载队列` : '没有可入队的更新文件')
+    } catch (error) {
+      toast('error', `更新文件入队失败：${error instanceof Error ? error.message : error}`)
+    } finally {
+      void load()
+    }
+  }
+  const queueGroupUpdates = (itemId: number): Promise<void> => queueUpdates(() => api.downloads.startUpdates(itemId))
+
+  const retryItem = async (itemId: number): Promise<void> => {
+    setRetryingId(itemId)
+    try {
+      const restored = await api.updates.retryItemFileApi(itemId)
+      toast(restored ? 'info' : 'warn', restored ? '已恢复商品文件 API 检查' : '文件更新 API 异常仍未解除')
+    } catch (error) {
+      toast('error', `重试 API 失败：${error instanceof Error ? error.message : error}`)
+    } finally {
+      setRetryingId(null)
+      void load()
+    }
+  }
+
+  const renderGroupRows = (fileGroups: FileListRow[][], updatesOnly = false) => fileGroups.map((files) => {
+    const { itemId, itemTitle } = files[0]
+    const isExpanded = (updatesOnly ? expandedUpdates : expanded).has(itemId)
+    const allFiles = updatesOnly ? files : filesByItem.get(itemId) ?? files
+    const hasCurrentFile = allFiles.some((file) => file.localPath)
+    const summary = groupSummary(allFiles, progressMap)
+    const missingMeta = summary.missingWithoutFile ? STATUS_META.missing : EXPIRED_FILE_PRESENT
+    const meta = summary.status === 'missing' ? missingMeta : STATUS_META[summary.status]
+    return (
+      <Fragment key={itemId}>
+        <tr className={`dl-row dl-group-row dl-row-${summary.status}`}>
+          <td className="dl-cell-item" title={`#${itemId} ${itemTitle}`}>
+            <button type="button" className="dl-group-toggle" aria-expanded={isExpanded} onClick={() => toggleGroup(itemId, updatesOnly)}>
+              <span className="dl-group-chevron" aria-hidden="true" />
+              <span className="dl-group-title">
+                <span className="dl-item-id">#{itemId}</span>
+                <span className="dl-item-name">{itemTitle}</span>
+              </span>
+            </button>
+          </td>
+          <td className="dl-cell-file dl-group-count">{files.length} 个文件</td>
+          <td className="dl-cell-size">{summary.unknown ? '—' : formatBytes(summary.downloadable ? summary.total : null)}</td>
+          <td className="dl-cell-status">
+            <div className="dl-group-status">
+              <span className={`badge ${meta.cls}`}>{meta.label}</span>
+              {summary.hasMissing && summary.status !== 'missing' && <span className={`badge ${missingMeta.cls}`}>存在失效文件</span>}
+            </div>
+          </td>
+          <td className="dl-cell-progress">
+            {summary.downloadable > 0 && (
+              <ProgressBar
+                done={summary.done}
+                total={summary.total}
+                complete={summary.completed === summary.downloadable}
+                indeterminate={summary.unknown && summary.completed !== summary.downloadable}
+              />
+            )}
+          </td>
+          <td className="dl-cell-action">
+            <div className="actions-inner">
+              <button
+                className="mini-btn"
+                disabled={busy || (updatesOnly ? !files.some((file) => viewStatusOf(file) === 'update') : !redownloadableItems.has(itemId))}
+                onClick={() => void (updatesOnly ? queueGroupUpdates(itemId) : doRedownload(itemId, !hasCurrentFile))}
+                title={updatesOnly ? '下载该商品的待下载更新' : hasCurrentFile ? '重新下载该商品的所有有效文件' : '下载该商品的所有有效文件'}
+              >
+                {updatesOnly ? '下载本组更新' : hasCurrentFile ? '整组重下' : '整组下载'}
+              </button>
+              {hasCurrentFile && (
+                <button className="mini-btn" onClick={() => void openItemDir(itemId)} title="打开该商品的下载文件夹">
+                  位置
+                </button>
+              )}
+            </div>
+          </td>
+        </tr>
+        {isExpanded && files.map((r) => {
+          const vs = viewStatusOf(r)
+          const localPath = r.localPath ?? r.archivedPath
+          const meta = vs === 'missing' && localPath ? EXPIRED_FILE_PRESENT : STATUS_META[vs]
+          const progress = progressMap.get(r.downloadableId)
+          return (
+            <tr key={r.downloadableId} className={`dl-row dl-child-row dl-row-${vs}`}>
+              <td className="dl-cell-item" />
+              <td className="dl-cell-file fname" title={r.filename}>
+                {r.filename}
+              </td>
+              <td className="dl-cell-size">{formatBytes(r.localSize ?? r.lastSize)}</td>
+              <td className="dl-cell-status">
+                <span className={`badge ${meta.cls}`} title={vs === 'failed' ? String(r.lastError ?? '') : ''}>
+                  {meta.label}
+                </span>
+              </td>
+              <td className="dl-cell-progress">
+                {vs === 'downloading' && (
+                  <ProgressBar done={progress?.done ?? 0} total={progress?.total ?? 0} indeterminate={!progress?.total} />
+                )}
+              </td>
+              <td className="dl-cell-action">
+                <div className="actions-inner">
+                  {vs === 'queued' && (
+                    <button
+                      className="mini-btn"
+                      onClick={() => void doDownloadNow(r)}
+                      title="跳过队列与并发限制，立即开始下载"
+                    >
+                      立即下载
+                    </button>
+                  )}
+                  {vs === 'downloading' || vs === 'queued' ? (
+                    <button className="mini-btn" onClick={() => void rowAction(r, vs)}>
+                      取消
+                    </button>
+                  ) : vs === 'missing' ? (
+                    localPath
+                      ? <span className="mini-btn dl-action-spacer" aria-hidden="true">重新下载</span>
+                      : <span className="dl-na">—</span>
+                  ) : (
+                    <button className="mini-btn" onClick={() => void rowAction(r, vs)}>
+                      {vs === 'failed' ? '↻ 重试' : vs === 'downloaded' ? '重新下载' : vs === 'update' ? '下载更新' : '下载'}
+                    </button>
+                  )}
+                  {localPath && (
+                    <button className="mini-btn" onClick={() => void api.history.revealPath(localPath)} title={localPath}>
+                      位置
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          )
+        })}
+      </Fragment>
+    )
+  })
+
   return (
     <div className="dl-page">
       <div className="panel">
         <div className="dl-toolbar">
-          <button onClick={onRunCheck}>🔍 检查全部下载文件更新</button>
           <button
             className="primary"
             disabled={busy || (counts.pending === 0 && stats.queued === 0 && !stats.userPaused && !stats.paused)}
@@ -446,12 +601,16 @@ export default function UpdatesPage({
           >
             ▶ 开始全部{counts.pending > 0 ? `（${counts.pending}）` : ''}
           </button>
+          <button disabled={!canStartUpdates} onClick={() => void queueUpdates(api.downloads.startUpdates)}>
+            下载全部更新
+          </button>
           <button disabled={busy || (stats.active === 0 && stats.queued === 0)} onClick={() => void doPauseToggle()} title="暂停队列（排队保留，恢复后续传）">
             ⏸ 暂停
           </button>
           <button disabled={busy || counts.failed === 0} onClick={() => void doRetryFailed()} title="把所有失败的文件重新加入队列">
             ↻ 重试失败（{counts.failed}）
           </button>
+          <button onClick={onRunCheck} disabled={checkBusy || retryingId !== null}>强制检查全部文件更新</button>
           <button
             disabled={busy || redownloadableItems.size === 0}
             onClick={() => void doRedownload()}
@@ -475,6 +634,23 @@ export default function UpdatesPage({
           {stats.userPaused && <span className="badge update">已暂停（可点开始恢复）</span>}
           {stats.paused && <span className="badge missing">认证暂停（检查通过后自动恢复）</span>}
         </div>
+        {itemFileStatuses.length > 0 && (
+          <ul className="dl-file-api-status" aria-label="商品文件检查提示">
+            {itemFileStatuses.map((item) => (
+              <li key={item.itemId}>
+                <span className={`badge ${item.abnormal ? 'missing' : 'update'}`}>
+                  {item.abnormal ? '文件更新 API 异常' : 'API 发现变化，待检查'}
+                </span>
+                <span>#{item.itemId} {item.title}</span>
+                {item.abnormal && (
+                  <button disabled={checkBusy || retryingId !== null} onClick={() => void retryItem(item.itemId)}>
+                    {retryingId === item.itemId ? '重试中…' : '重试 API'}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
         <div className="dl-filters">
           {FILTERS.map((f) => (
             <button key={f.key} className={`dl-filter ${filter === f.key ? 'active' : ''}`} onClick={() => setFilter(f.key)}>
@@ -484,6 +660,19 @@ export default function UpdatesPage({
           ))}
         </div>
       </div>
+
+      <section className="panel dl-update-card" aria-label="更新文件">
+        <h3>更新文件{updateCount > 0 && `（${updateCount}）`}</h3>
+        {updateCount > 0 ? (
+          <div className="dl-table-wrap">
+            <table className="dl-table">
+              <colgroup>{COLS.map((col) => <col key={col.key} style={{ width: `${col.pct}%` }} />)}</colgroup>
+              <thead><tr>{COLS.map((col) => <th key={col.key} scope="col">{col.label}</th>)}</tr></thead>
+              <tbody>{renderGroupRows(updateGroups, true)}</tbody>
+            </table>
+          </div>
+        ) : <div className="dl-update-empty">暂无更新文件</div>}
+      </section>
 
       <div className="dl-table-wrap" ref={wrapRef}>
         <table
@@ -511,121 +700,7 @@ export default function UpdatesPage({
             </tr>
           </thead>
           <tbody>
-            {groups.map((files) => {
-              const { itemId, itemTitle } = files[0]
-              const isExpanded = expanded.has(itemId)
-              const allFiles = filesByItem.get(itemId) ?? files
-              const hasCurrentFile = allFiles.some((file) => file.localPath)
-              const summary = groupSummary(allFiles, progressMap)
-              const missingMeta = summary.missingWithoutFile ? STATUS_META.missing : EXPIRED_FILE_PRESENT
-              const meta = summary.status === 'missing' ? missingMeta : STATUS_META[summary.status]
-              return (
-                <Fragment key={itemId}>
-                  <tr className={`dl-row dl-group-row dl-row-${summary.status}`}>
-                    <td className="dl-cell-item" title={`#${itemId} ${itemTitle}`}>
-                      <button type="button" className="dl-group-toggle" aria-expanded={isExpanded} onClick={() => toggleGroup(itemId)}>
-                        <span className="dl-group-chevron" aria-hidden="true" />
-                        <span className="dl-group-title">
-                          <span className="dl-item-id">#{itemId}</span>
-                          <span className="dl-item-name">{itemTitle}</span>
-                        </span>
-                      </button>
-                    </td>
-                    <td className="dl-cell-file dl-group-count">{files.length} 个文件</td>
-                    <td className="dl-cell-size">{summary.unknown ? '—' : formatBytes(summary.downloadable ? summary.total : null)}</td>
-                    <td className="dl-cell-status">
-                      <div className="dl-group-status">
-                        <span className={`badge ${meta.cls}`}>{meta.label}</span>
-                        {summary.hasMissing && summary.status !== 'missing' && <span className={`badge ${missingMeta.cls}`}>存在失效文件</span>}
-                      </div>
-                    </td>
-                    <td className="dl-cell-progress">
-                      {summary.downloadable > 0 && (
-                        <ProgressBar
-                          done={summary.done}
-                          total={summary.total}
-                          complete={summary.completed === summary.downloadable}
-                          indeterminate={summary.unknown && summary.completed !== summary.downloadable}
-                        />
-                      )}
-                    </td>
-                    <td className="dl-cell-action">
-                      <div className="actions-inner">
-                        <button
-                          className="mini-btn"
-                          disabled={busy || !redownloadableItems.has(itemId)}
-                          onClick={() => void doRedownload(itemId, !hasCurrentFile)}
-                          title={hasCurrentFile ? '重新下载该商品的所有有效文件' : '下载该商品的所有有效文件'}
-                        >
-                          {hasCurrentFile ? '整组重下' : '整组下载'}
-                        </button>
-                        {hasCurrentFile && (
-                          <button className="mini-btn" onClick={() => void openItemDir(itemId)} title="打开该商品的下载文件夹">
-                            位置
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                  {isExpanded && files.map((r) => {
-                    const vs = viewStatusOf(r)
-                    const localPath = r.localPath ?? r.archivedPath
-                    const meta = vs === 'missing' && localPath ? EXPIRED_FILE_PRESENT : STATUS_META[vs]
-                    const progress = progressMap.get(r.downloadableId)
-                    return (
-                      <tr key={r.downloadableId} className={`dl-row dl-child-row dl-row-${vs}`}>
-                        <td className="dl-cell-item" />
-                        <td className="dl-cell-file fname" title={r.filename}>
-                          {r.filename}
-                        </td>
-                        <td className="dl-cell-size">{formatBytes(r.localSize ?? r.lastSize)}</td>
-                        <td className="dl-cell-status">
-                          <span className={`badge ${meta.cls}`} title={vs === 'failed' ? String(r.lastError ?? '') : ''}>
-                            {meta.label}
-                          </span>
-                        </td>
-                        <td className="dl-cell-progress">
-                          {vs === 'downloading' && (
-                            <ProgressBar done={progress?.done ?? 0} total={progress?.total ?? 0} indeterminate={!progress?.total} />
-                          )}
-                        </td>
-                        <td className="dl-cell-action">
-                          <div className="actions-inner">
-                            {vs === 'queued' && (
-                              <button
-                                className="mini-btn"
-                                onClick={() => void doDownloadNow(r)}
-                                title="跳过队列与并发限制，立即开始下载"
-                              >
-                                立即下载
-                              </button>
-                            )}
-                            {vs === 'downloading' || vs === 'queued' ? (
-                              <button className="mini-btn" onClick={() => void rowAction(r, vs)}>
-                                取消
-                              </button>
-                            ) : vs === 'missing' ? (
-                              localPath
-                                ? <span className="mini-btn dl-action-spacer" aria-hidden="true">重新下载</span>
-                                : <span className="dl-na">—</span>
-                            ) : (
-                              <button className="mini-btn" onClick={() => void rowAction(r, vs)}>
-                                {vs === 'failed' ? '↻ 重试' : vs === 'downloaded' ? '重新下载' : vs === 'update' ? '下载更新' : '下载'}
-                              </button>
-                            )}
-                            {localPath && (
-                              <button className="mini-btn" onClick={() => void api.history.revealPath(localPath)} title={localPath}>
-                                位置
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </Fragment>
-              )
-            })}
+            {renderGroupRows(groups)}
             {groups.length === 0 && (
               <tr>
                 <td colSpan={6}>

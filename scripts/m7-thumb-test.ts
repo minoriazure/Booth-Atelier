@@ -35,10 +35,10 @@ async function main() {
 
     // 2) 时间间隔设置
     console.log('\n=== 2. 时间间隔设置 ===')
-    ctx.settings.set({ startupCheckIntervalDays: 7 })
+    ctx.settings.set({ startupLibrarySyncIntervalDays: 7 })
     const s = ctx.settings.get()
-    console.log(`startupCheckIntervalDays=${s.startupCheckIntervalDays}`)
-    if (s.startupCheckIntervalDays !== 7) throw new Error('设置未持久化')
+    console.log(`startupLibrarySyncIntervalDays=${s.startupLibrarySyncIntervalDays}`)
+    if (s.startupLibrarySyncIntervalDays !== 7) throw new Error('设置未持久化')
 
     console.log('\n✓ M7 验证通过')
   } finally {

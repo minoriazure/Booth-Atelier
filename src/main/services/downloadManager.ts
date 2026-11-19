@@ -62,6 +62,10 @@ export class DownloadManager {
     this.pump()
   }
 
+  isActive(downloadableId: number): boolean {
+    return this.active.has(downloadableId)
+  }
+
   /** 入队单个链接；已在队列/进行中则忽略，返回是否新入队。deferPump=true 时不立即派发 */
   enqueue(downloadableId: number, source: DownloadSource, deferPump = false): boolean {
     const d = this.repo.getDownloadable(downloadableId)
@@ -150,6 +154,10 @@ export class DownloadManager {
     this.pump()
     if (n > 0) log.info(`startAll: queued ${n} pending files, dispatched`)
     return n
+  }
+
+  startUpdates(itemId?: number): number {
+    return this.enqueueMany(this.repo.listPendingIds(true, itemId), 'update')
   }
 
   /** 强制下载所有有效文件，保留正在执行的任务以及已有排队顺序。 */

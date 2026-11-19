@@ -8,6 +8,7 @@ import { checkDeepLinkHost, registerProtocol } from '../protocol'
 import { createLogger } from '../util/log'
 import { listDays, readDay, searchLogs, cleanupLogs } from '../services/logService'
 import { videoThumbPath } from '../services/videoThumb'
+import { apiFileCheckToast } from '../services/itemFileUpdates'
 import { isWebUrl } from '../util/externalUrl'
 import type { ProxyTestResult } from '../../shared/types'
 import { LOG_LEVELS } from '../../shared/types'
@@ -207,16 +208,18 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
       error: null,
       thumbMediaUrl: v.localPath && existsSync(videoThumbPath(v.localPath)) ? tryMedia(videoThumbPath(v.localPath)) : null
     }))
+    detail.fileUpdateApiStatus = ctx.fileUpdates.statusFor(rid)
     return detail
   })
   handle('library:sync', async () => {
+    if (ctx.checker.isRunning) throw new Error('文件检查正在进行')
     return ctx.sync.sync()
   })
   handle('library:priceStats', () => ctx.prices.get())
   handle('library:refreshItem', async (itemId: unknown) => {
     const rid = id.parse(itemId)
     if (!ctx.repo.getItemDetail(rid)) throw new Error('本地不存在该商品')
-    return ctx.sync.refreshItem(rid)
+    return ctx.sync.checkItemMetadata(rid)
   })
   handle('library:deleteItem', async (itemId: unknown) => {
     const rid = id.parse(itemId)
@@ -338,15 +341,23 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
 
   // ── updates ──
   handle('updates:checkGlobal', async () => {
+    if (ctx.fileUpdates.isRunning || ctx.sync.isRunning) throw new Error('库同步或商品文件核对正在进行')
     const summary = await ctx.checker.checkGlobal()
     send('event:libraryUpdated', summary)
     return summary
   })
   handle('updates:checkItem', async (itemId: unknown) => {
-    const summary = await ctx.checker.checkItem(id.parse(itemId))
+    const summary = await ctx.fileUpdates.checkItem(id.parse(itemId))
     send('event:libraryUpdated', summary)
     return summary
   })
+  handle('updates:itemFileStatuses', () => ctx.fileUpdates.list())
+  handle('updates:checkApiFiles', async () => {
+    const result = await ctx.fileUpdates.checkApiUpdates()
+    send('event:toast', apiFileCheckToast(result))
+    return result
+  })
+  handle('updates:retryItemFileApi', (itemId: unknown) => ctx.fileUpdates.retryApi(id.parse(itemId)))
   handle('updates:listAvailable', () => ctx.repo.listUpdatesAvailable())
 
   // ── downloads ──
@@ -364,6 +375,7 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
     ctx.downloads.startAll(src)
     return ctx.downloads.stats // 返回统计（queued/active），UI 需要
   })
+  handle('downloads:startUpdates', (itemId: unknown) => ctx.downloads.startUpdates(id.optional().parse(itemId)))
   // 兼容旧名：语义同 startAll
   handle('downloads:enqueueAll', (source: unknown) => {
     const src = z.enum(['initial', 'bulk', 'manual', 'update']).parse(source)
@@ -504,10 +516,12 @@ export function registerIpc(ctx: AppContext, getWindow: () => BrowserWindow | nu
   // ── 状态转发 ──
   ctx.sync.onProgress = (e) => send('event:checkProgress', e)
   ctx.checker.onProgress = (e) => send('event:checkProgress', e)
+  ctx.fileUpdates.onProgress = (e) => send('event:checkProgress', e)
   ctx.downloads.onProgress = (e) => send('event:downloadProgress', e)
   ctx.downloads.onDone = (e) => send('event:downloadDone', e)
   ctx.downloads.onError = (e) => send('event:downloadError', e)
   ctx.downloads.onQueueChanged = () => send('event:queueChanged', ctx.downloads.stats)
+  ctx.fileUpdates.onChanged = () => send('event:itemFileUpdatesChanged', undefined)
   ctx.imageLocalizer.onImageDone = (itemId, url) => send('event:imageReady', { itemId, url })
   ctx.imageLocalizer.onProgress = (e) => send('event:imageProgress', e)
   ctx.imageLocalizer.onDerivativeProgress = (e) => send('event:derivativeProgress', e)

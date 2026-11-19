@@ -50,6 +50,12 @@ npx tsx scripts/m3-verify.ts         # 全链路回归（同步 → 检查 → �
 
 > 以上脚本都需要有效的 `booth_cookies.txt`，仅在本地运行，不会在 CI 中执行。
 
+更新检查的离线回归使用隔离数据库和模拟 BOOTH 响应，覆盖空库首启、分页不完整、API 与全量检查共享探测、认证中断续查，以及下载与指纹检查并发。
+
+```bash
+npm run test -- tests/library-sync.test.ts tests/item-file-updates.test.ts tests/network-queue.test.ts
+```
+
 ## 调试环境变量
 
 以下环境变量用于开发调试，普通使用无需设置：
@@ -58,7 +64,7 @@ npx tsx scripts/m3-verify.ts         # 全链路回归（同步 → 检查 → �
 | --- | --- |
 | `BOOTH_HASH=tab=settings` | 启动后直接进入指定路由 |
 | `BOOTH_SCREENSHOT=<路径>` | 启动后截图保存到指定路径（配合 `BOOTH_SCREENSHOT_DELAY`） |
-| `BOOTH_NO_STARTUP=1` | 跳过启动时的库同步与文件检查 |
+| `BOOTH_NO_STARTUP=1` | 跳过启动时的库同步、商品 API 扫描与全量文件检查 |
 | `BOOTH_ENQUEUE=1` | 启动后自动加入队列 |
 | `BOOTH_FORCE_HOST_PROMPT=1` | 在 dev 模式下强制弹出深链注册询问 |
 

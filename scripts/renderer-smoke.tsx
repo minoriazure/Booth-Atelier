@@ -64,6 +64,7 @@ Object.assign(window, { runRegression: async () => {
   let revealedPath: string | undefined
   const archivedPath = 'C:/booth/history/old-2.zip'
   Object.assign(api, { library: { openItemDir: async (id: number) => { openedItem = id; return '' } } })
+  Object.assign(api, { updates: { itemFileStatuses: async () => [] } })
   Object.assign(api.history as object, { revealPath: async (path: string) => { revealedPath = path } })
   Object.assign(api, { downloads: {
     list: async () => [file, {

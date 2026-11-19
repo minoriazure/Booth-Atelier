@@ -1,8 +1,9 @@
 import type { AuthChecker } from '../booth/auth'
+import type { ScopedLibraryItem } from '../booth/libraryCrawler'
 import type { LibrarySyncService } from './librarySyncService'
-import type { UpdateCheckService } from './updateCheckService'
+import type { FileProbeBatch, UpdateCheckService } from './updateCheckService'
 import type { SettingsService } from './settingsService'
-import type { CheckProgressEvent, CheckSummary } from '../../shared/types'
+import type { CheckSummary } from '../../shared/types'
 import { isAuthError } from '../booth/errors'
 import { createLogger } from '../util/log'
 
@@ -15,12 +16,20 @@ export interface StartupResult {
   error?: string
 }
 
+interface StartupApiCheck {
+  intervalHours: number
+  canCheckLibrary: boolean
+  verifiedItems: ReadonlyMap<number, ScopedLibraryItem>
+  batch: FileProbeBatch
+  onAuthExpired: (message: string) => void
+  enqueueUpdates?: (ids: number[]) => void
+}
+
 /**
  * 启动编排：认证探测 → (可选)库同步 → (可选)全局文件检查。
  * 每步失败可独立降级（例如库同步失败但下载队列仍可工作）。
  */
 export class StartupService {
-  onProgress: ((e: CheckProgressEvent) => void) | null = null
   onAuthExpired: ((message: string) => void) | null = null
 
   constructor(
@@ -30,8 +39,11 @@ export class StartupService {
     private settings: SettingsService
   ) {}
 
-  async runOnStartup(): Promise<StartupResult> {
+  async runOnStartup(
+    startItemApiCheck?: (options: StartupApiCheck) => void | Promise<void>
+  ): Promise<StartupResult> {
     const s = this.settings.get()
+    const hadLibrary = this.sync.hasItems()
     const result: StartupResult = { authOk: false }
 
     try {
@@ -42,52 +54,70 @@ export class StartupService {
       result.authError = msg
       if (isAuthError(e)) this.onAuthExpired?.(msg)
       log.warn('startup auth failed:', msg)
-      return result
     }
 
-    // 两个独立开关：库同步（元数据）与文件更新检查
-    if (!s.autoSyncLibraryOnStartup && !s.autoCheckFilesOnStartup) {
-      log.info('startup auto checks disabled, skip')
-      return result
-    }
-
-    // 时间间隔门控：基于【上次全局检查时间】（非单个商品），手动检查不受影响。
-    // interval=0 → 禁用间隔，每次启动都查；两类检查各用自己的全局时间戳独立判断。
-    const intervalDays = s.startupCheckIntervalDays
-    const due = (lastIso: string | null): boolean => {
-      if (intervalDays <= 0) return true // 0 = 每次启动检查
+    const due = (lastIso: string | null, intervalDays: number): boolean => {
+      if (intervalDays === 0) return true
       if (!lastIso) return true // 从未检查过
       const t = Date.parse(lastIso)
       if (isNaN(t)) return true
       return Date.now() - t >= intervalDays * 86_400_000
     }
-    const libraryDue = due(s.lastLibrarySyncAt)
-    const fileDue = due(s.lastGlobalCheckAt)
-    log.info(`startup interval gate: ${intervalDays}d, libraryDue=${libraryDue} (last=${s.lastLibrarySyncAt}), fileDue=${fileDue} (last=${s.lastGlobalCheckAt})`)
-    if (!libraryDue && !fileDue) {
-      log.info('both checks within interval, skip')
-      return result
+    const libraryDue = result.authOk && s.autoSyncLibraryOnStartup && due(s.lastLibrarySyncAt, s.startupLibrarySyncIntervalDays)
+    const fullCheckAnchor = s.lastGlobalCheckAt ?? s.firstLibrarySyncAt ?? s.lastLibrarySyncAt
+    const fileDue = result.authOk && hadLibrary && s.autoForceCheckFilesOnStartup &&
+      (this.checker.hasPendingGlobalCheck || (!!fullCheckAnchor && due(fullCheckAnchor, s.startupFullFileCheckIntervalDays)))
+    log.info(`startup: libraryDue=${libraryDue} (${s.startupLibrarySyncIntervalDays}d), fullFilesDue=${fileDue} (${s.startupFullFileCheckIntervalDays}d)`)
+
+    const reportFailure = (label: string, error: unknown): void => {
+      const message = error instanceof Error ? error.message : String(error)
+      result.error = result.error ? `${result.error} · ${message}` : message
+      if (isAuthError(error)) {
+        this.onAuthExpired?.(message)
+        result.authOk = false
+      }
+      log.warn(`startup ${label} failed:`, message)
     }
 
-    try {
-      let syncSummary: CheckSummary | null = null
-      if (s.autoSyncLibraryOnStartup && libraryDue) {
-        syncSummary = await this.sync.sync()
-        this.onProgress?.({ phase: 'library', current: 0, total: 0, label: '库同步完成' })
+    let syncSummary: CheckSummary | null = null
+    const checkApi = hadLibrary && s.autoCheckItemApiOnStartup && startItemApiCheck
+    const verifiedItems = new Map<number, ScopedLibraryItem>()
+    if (libraryDue) {
+      try {
+        syncSummary = await this.sync.sync(checkApi ? verifiedItems : undefined)
+      } catch (error) {
+        verifiedItems.clear()
+        reportFailure('library sync', error)
       }
-      let checkSummary: CheckSummary | null = null
-      if (s.autoCheckFilesOnStartup && fileDue) {
-        try {
-          checkSummary = await this.checker.checkGlobal()
-        } catch (e) {
-          result.error = e instanceof Error ? e.message : String(e)
-          if (isAuthError(e)) {
-            this.onAuthExpired?.(result.error)
-            result.authOk = false
-          }
-          log.warn('startup file check failed:', result.error)
-        }
+    }
+    const batch: FileProbeBatch = { attemptedIds: new Set(), checkedIds: new Set(), fingerprintUpdates: new Set() }
+    const apiAutoDownload = s.autoCheckItemApiOnStartup && s.autoDownloadStartupApiUpdates
+    const fullAutoDownload = s.autoForceCheckFilesOnStartup && s.autoDownloadStartupFullCheckUpdates
+    if (checkApi) {
+      await checkApi({
+        intervalHours: s.startupMetadataCheckIntervalHours,
+        canCheckLibrary: result.authOk,
+        verifiedItems,
+        batch,
+        onAuthExpired: (message) => {
+          result.authOk = false
+          result.authError = message
+          this.onAuthExpired?.(message)
+        },
+        enqueueUpdates: apiAutoDownload ? (ids) => this.checker.deferStartupDownloads('api', ids) : undefined
+      })
+    }
+
+    let checkSummary: CheckSummary | null = null
+    if (fileDue && result.authOk) {
+      try {
+        checkSummary = await this.checker.checkGlobal(fullAutoDownload, { batch, resume: true })
+      } catch (error) {
+        reportFailure('full file check', error)
       }
+    }
+    const enqueued = result.authOk ? this.checker.flushStartupDownloads(apiAutoDownload, fullAutoDownload) : 0
+    if (syncSummary || checkSummary) {
       const zero: CheckSummary = { libraryChecked: 0, libraryChanged: 0, filesChecked: 0, filesUpdated: 0, downloaded: 0, failed: 0 }
       const a = syncSummary ?? zero
       const b = checkSummary ?? zero
@@ -97,18 +127,11 @@ export class StartupService {
         libraryChanged: a.libraryChanged + b.libraryChanged,
         filesChecked: a.filesChecked + b.filesChecked,
         filesUpdated: a.filesUpdated + b.filesUpdated,
-        downloaded: a.downloaded + b.downloaded,
+        filesRemaining: checkSummary?.filesRemaining,
+        downloaded: a.downloaded + b.downloaded + enqueued,
         failed: a.failed + b.failed
       }
       log.info('startup done:', JSON.stringify(result.summary))
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      result.error = msg
-      if (isAuthError(e)) {
-        this.onAuthExpired?.(msg)
-        result.authOk = false
-      }
-      log.warn('startup sync/check failed:', msg)
     }
     return result
   }

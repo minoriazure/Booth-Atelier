@@ -82,12 +82,16 @@ export class LibraryRepo {
         [input.title, input.thumbnailUrl, input.isGift ? 1 : 0, isFree, input.itemId]
       )
     }
-    for (const d of input.downloadables) {
+    this.upsertDownloadables(input.itemId, input.downloadables)
+  }
+
+  upsertDownloadables(itemId: number, downloadables: Array<{ downloadableId: number; variationId: number | null; filename: string; fallbackUrl?: string }>): void {
+    for (const d of downloadables) {
       const dExists = this.db.get('SELECT downloadable_id FROM downloadables WHERE downloadable_id = ?', [d.downloadableId])
       if (!dExists) {
         this.db.run(
           `INSERT INTO downloadables (downloadable_id, item_id, filename, variation_id, fallback_url) VALUES (?, ?, ?, ?, ?)`,
-          [d.downloadableId, input.itemId, d.filename, d.variationId, d.fallbackUrl ?? null]
+          [d.downloadableId, itemId, d.filename, d.variationId, d.fallbackUrl ?? null]
         )
       } else {
         this.db.run(
@@ -147,6 +151,12 @@ export class LibraryRepo {
     return this.db.all<{ item_id: number }>('SELECT item_id FROM items').map((r) => r.item_id)
   }
 
+  listItemIdsDueForApiCheck(cutoff: number): number[] {
+    return this.db.all<{ item_id: number }>(
+      'SELECT item_id FROM items WHERE api_metadata_checked_at IS NULL OR api_metadata_checked_at <= ?', [cutoff]
+    ).map((row) => row.item_id)
+  }
+
   listFreeItemIds(): number[] {
     return this.db.all<{ item_id: number }>('SELECT item_id FROM items WHERE is_free = 1').map((r) => r.item_id)
   }
@@ -157,6 +167,38 @@ export class LibraryRepo {
 
   getMetadataHash(itemId: number): string | null {
     return this.db.get<{ metadata_hash: string | null }>('SELECT metadata_hash FROM items WHERE item_id = ?', [itemId])?.metadata_hash ?? null
+  }
+
+  getItemMetadataCheck(itemId: number): { hash: string | null; checkedAt: number | null; hasHtml: boolean } | undefined {
+    const row = this.db.get<{ hash: string | null; checkedAt: number | null; hasHtml: number }>(
+      `SELECT api_metadata_hash AS hash, api_metadata_checked_at AS checkedAt,
+        (metadata_hash IS NOT NULL AND detail_not_found = 0) AS hasHtml
+       FROM items WHERE item_id = ?`, [itemId]
+    )
+    return row && { ...row, hasHtml: Boolean(row.hasHtml) }
+  }
+
+  markItemMetadataChecked(itemId: number, checkedAt: number): void {
+    this.db.run('UPDATE items SET api_metadata_checked_at = ? WHERE item_id = ?', [checkedAt, itemId])
+  }
+
+  saveItemMetadataCheckHash(itemId: number, hash: string): void {
+    this.db.run('UPDATE items SET api_metadata_hash = ? WHERE item_id = ?', [hash, itemId])
+  }
+
+  getItemFileUpdateState<T>(itemId: number): T | null {
+    const row = this.db.get<{ state: string | null }>('SELECT api_file_update_state AS state FROM items WHERE item_id = ?', [itemId])
+    return row?.state ? JSON.parse(row.state) as T : null
+  }
+
+  saveItemFileUpdateState(itemId: number, state: unknown): void {
+    this.db.run('UPDATE items SET api_file_update_state = ? WHERE item_id = ?', [JSON.stringify(state), itemId])
+  }
+
+  listItemFileUpdateStates<T>(): Array<{ itemId: number; title: string; state: T }> {
+    return this.db.all<{ itemId: number; title: string; state: string }>(
+      'SELECT item_id AS itemId, title, api_file_update_state AS state FROM items WHERE api_file_update_state IS NOT NULL ORDER BY item_id'
+    ).map((row) => ({ ...row, state: JSON.parse(row.state) as T }))
   }
 
   markDetailNotFound(itemId: number): void {
@@ -289,11 +331,13 @@ export class LibraryRepo {
    * 待下载：remote / update_available、未排队、最近一次下载未失败。
    * 已完成（downloaded）与失败（failed）都不在此列——「开始全部」只动这里。
    */
-  listPendingIds(): number[] {
+  listPendingIds(onlyUpdates = false, itemId?: number): number[] {
     return this.db
       .all<{ downloadable_id: number }>(
         `SELECT d.downloadable_id FROM downloadables d
          WHERE d.status IN ('remote', 'update_available')
+           AND (? = 0 OR d.status = 'update_available')
+           AND (? IS NULL OR d.item_id = ?)
            AND d.queued_at IS NULL
            AND d.status != 'missing'
            AND d.item_id NOT IN (SELECT item_id FROM items WHERE is_free = 1)
@@ -303,7 +347,7 @@ export class LibraryRepo {
                AND r.status = 'failed'
                AND r.id = (SELECT MAX(id) FROM download_records WHERE downloadable_id = d.downloadable_id)
            )
-         ORDER BY d.item_id DESC, d.downloadable_id`
+         ORDER BY d.item_id DESC, d.downloadable_id`, [Number(onlyUpdates), itemId ?? null, itemId ?? null]
       )
       .map((r) => r.downloadable_id)
   }

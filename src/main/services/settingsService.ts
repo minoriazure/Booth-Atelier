@@ -1,17 +1,21 @@
 import { basename, isAbsolute, resolve } from 'path'
 import { existsSync, mkdirSync } from 'fs'
-import type { Settings } from '../../shared/types'
+import { STARTUP_INTERVALS, type Settings } from '../../shared/types'
 import type { LibraryRepo } from '../db/repos'
 import type { Paths } from '../util/paths'
 
 const DEFAULTS: Omit<Settings, 'downloadRoot' | 'downloadRootMissing'> = {
   autoSyncLibraryOnStartup: true,
-  autoCheckFilesOnStartup: true,
+  autoCheckItemApiOnStartup: true,
+  autoDownloadStartupApiUpdates: false,
+  autoForceCheckFilesOnStartup: true,
+  autoDownloadStartupFullCheckUpdates: false,
   autoCheckImagesOnStartup: true,
   themeMode: 'dark',
   themeAccent: '#4c8dff',
-  startupCheckIntervalDays: 7,
-  autoDownloadUpdates: true,
+  startupLibrarySyncIntervalDays: STARTUP_INTERVALS.library.defaultValue,
+  startupMetadataCheckIntervalHours: STARTUP_INTERVALS.itemApi.defaultValue,
+  startupFullFileCheckIntervalDays: STARTUP_INTERVALS.fullFiles.defaultValue,
   downloadConcurrency: 3,
   minRequestIntervalMs: 250,
   proxyMode: 'system',
@@ -22,7 +26,12 @@ const DEFAULTS: Omit<Settings, 'downloadRoot' | 'downloadRootMissing'> = {
   autoRegisterDeepLink: true,
   logRetentionDays: 60,
   lastLibrarySyncAt: null,
+  firstLibrarySyncAt: null,
   lastGlobalCheckAt: null
+}
+
+function boundedInterval(value: unknown, { min, max, defaultValue }: { min: number; max: number; defaultValue: number }): number {
+  return typeof value === 'number' && Number.isInteger(value) ? Math.max(min, Math.min(max, value)) : defaultValue
 }
 
 export class SettingsService {
@@ -37,12 +46,20 @@ export class SettingsService {
     const keys = Object.keys(DEFAULTS)
     const stored: Record<string, unknown> = {}
     for (const k of keys) stored[k] = this.repo.getSetting(k, DEFAULTS[k as keyof typeof DEFAULTS])
+    // 旧共享天数只迁入库同步，原全量检查开关继续控制全量检查。
+    const legacyDays = this.repo.getSetting('startupCheckIntervalDays', DEFAULTS.startupLibrarySyncIntervalDays)
+    const legacyForceEnabled = this.repo.getSetting('autoCheckFilesOnStartup', DEFAULTS.autoForceCheckFilesOnStartup)
+    const forceEnabled = this.repo.getSetting('autoForceCheckFilesOnStartup', legacyForceEnabled)
 
     const downloadRoot = this.resolveDownloadRoot()
     const cookiesPath = this.repo.getSetting<string>('cookiesPath', '')
     return {
       ...DEFAULTS,
       ...stored,
+      autoForceCheckFilesOnStartup: typeof forceEnabled === 'boolean' ? forceEnabled : DEFAULTS.autoForceCheckFilesOnStartup,
+      startupLibrarySyncIntervalDays: boundedInterval(this.repo.getSetting('startupLibrarySyncIntervalDays', legacyDays), STARTUP_INTERVALS.library),
+      startupMetadataCheckIntervalHours: boundedInterval(stored.startupMetadataCheckIntervalHours, STARTUP_INTERVALS.itemApi),
+      startupFullFileCheckIntervalDays: boundedInterval(stored.startupFullFileCheckIntervalDays, STARTUP_INTERVALS.fullFiles),
       downloadRoot,
       downloadRootMissing: !existsSync(downloadRoot) && downloadRoot !== this.defaultRoot,
       cookiesPath

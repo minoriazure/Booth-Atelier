@@ -15,6 +15,9 @@ import { SettingsService } from './services/settingsService'
 import { HistoryManager } from './services/historyManager'
 import { LibrarySyncService } from './services/librarySyncService'
 import { PriceStatsService } from './services/priceStatsService'
+import { ItemMetadataChecks } from './services/itemMetadataChecks'
+import { ItemFileUpdates } from './services/itemFileUpdates'
+import { fetchBoothItem } from './booth/itemApi'
 import { UpdateCheckService } from './services/updateCheckService'
 import { DownloadManager } from './services/downloadManager'
 import { StartupService } from './services/startupService'
@@ -48,6 +51,7 @@ export interface AppContext {
   videos: VideoService
   sync: LibrarySyncService
   prices: PriceStatsService
+  fileUpdates: ItemFileUpdates
   checker: UpdateCheckService
   downloads: DownloadManager
   /** 单商品本地删除（DB + 数据目录 + 下载文件移入 deleted） */
@@ -140,7 +144,6 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   const imageLocalizer = new ImageLocalizer(http, repo, paths)
   const videos = new VideoService(repo, paths)
   const prices = new PriceStatsService(http, repo)
-  const sync = new LibrarySyncService(crawler, itemPage, repo, history, imageLocalizer, prices)
   const downloads = new DownloadManager(deeplink, http, repo, history, paths, jar)
   downloads.setConcurrency(s.downloadConcurrency)
   // ② 恢复上次退出时的排队任务（排队中不回退待下载，自动继续下载）
@@ -149,7 +152,12 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
   } catch (e) {
     log.warn('restoreQueue failed:', e)
   }
-  const checker = new UpdateCheckService(deeplink, repo, downloads, () => settings.get().autoDownloadUpdates)
+  const checker = new UpdateCheckService(deeplink, repo, downloads)
+  const readItem = (itemId: number) => fetchBoothItem(http, itemId)
+  const fileUpdates = new ItemFileUpdates(repo, crawler, history, checker, readItem, () => sync.isRunning)
+  const metadataChecks = new ItemMetadataChecks(repo, readItem,
+    (itemId, data, seedOnly) => fileUpdates.observe(itemId, data, seedOnly))
+  const sync: LibrarySyncService = new LibrarySyncService(crawler, itemPage, repo, history, imageLocalizer, prices, metadataChecks, fileUpdates)
   const startup = new StartupService(auth, sync, checker, settings)
   const removal = new ItemRemovalService(
     repo,
@@ -181,6 +189,7 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
     videos,
     sync,
     prices,
+    fileUpdates,
     checker,
     downloads,
     removal,
@@ -188,6 +197,7 @@ export async function createAppContext(opts: AppContextOptions): Promise<AppCont
     defaultCookiesPath: opts.cookiesPath,
     reconcileLocal: () => reconcileLocalFiles(repo, paths),
     dispose() {
+      sync.stop()
       downloads.dispose()
       imageLocalizer.dispose()
       jar.stopWatch()

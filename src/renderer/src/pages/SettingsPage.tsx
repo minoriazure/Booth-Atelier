@@ -1,8 +1,63 @@
 import { useEffect, useState } from 'react'
-import type { Settings, ProxyTestResult } from '../../../shared/types'
+import { STARTUP_INTERVALS, type Settings, type ProxyTestResult } from '../../../shared/types'
 import { api } from '../api'
 
 type ToastFn = (level: 'info' | 'warn' | 'error', message: string) => void
+
+function StartupTaskSetting({ title, enabled, interval, range, unit, onToggle, onInterval, autoDownload, hint }: {
+  title: string
+  enabled: boolean
+  interval: number
+  range: { min: number; max: number }
+  unit: '天' | '小时'
+  onToggle: (enabled: boolean) => void
+  onInterval: (interval: number) => void
+  autoDownload?: { enabled: boolean; onToggle: (enabled: boolean) => void }
+  hint: string
+}) {
+  return (
+    <div className="setting-row">
+      <div className="label">{title}</div>
+      <div className="value">
+        <label className="switch">
+          <input type="checkbox" role="switch" aria-label={title} checked={enabled} onChange={(e) => onToggle(e.currentTarget.checked)} />
+          <span className="slider" />
+        </label>
+        <label className="startup-interval">
+          <span>最小间隔</span>
+          <select
+            className="startup-interval-select"
+            aria-label={`${title}的最小间隔`}
+            value={interval}
+            onChange={(e) => onInterval(Number(e.currentTarget.value))}
+          >
+            {Array.from({ length: range.max - range.min + 1 }, (_, index) => {
+              const value = range.min + index
+              return <option key={value} value={value}>{value === 0 ? '0 天（每次启动）' : `${value} ${unit}`}</option>
+            })}
+          </select>
+        </label>
+        {autoDownload && (
+          <span className="startup-interval startup-auto-download">
+            <span>有更新时自动下载</span>
+            <label className="switch">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-label={`${title}：有更新时自动下载`}
+                checked={autoDownload.enabled}
+                disabled={!enabled}
+                onChange={(e) => autoDownload.onToggle(e.currentTarget.checked)}
+              />
+              <span className="slider" />
+            </label>
+          </span>
+        )}
+        <span className="hint">{hint}</span>
+      </div>
+    </div>
+  )
+}
 
 /** 设置页：全局下载根目录、cookies 路径、开关、并发/频率 */
 export default function SettingsPage({
@@ -356,34 +411,44 @@ export default function SettingsPage({
 
       <div className="panel">
         <h3>更新与下载</h3>
-        <div className="setting-row">
-          <div className="label">启动时同步商品库</div>
-          <div className="value">
-            <label className="switch">
-              <input
-                type="checkbox"
-                checked={settings.autoSyncLibraryOnStartup}
-                onChange={(e) => void patch({ autoSyncLibraryOnStartup: e.target.checked })}
-              />
-              <span className="slider" />
-            </label>
-            <span className="hint">同步购买库和赠送库，并完整检查商品封面、画廊和简介（图片后台下载）</span>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="label">启动时检查文件更新</div>
-          <div className="value">
-            <label className="switch">
-              <input
-                type="checkbox"
-                checked={settings.autoCheckFilesOnStartup}
-                onChange={(e) => void patch({ autoCheckFilesOnStartup: e.target.checked })}
-              />
-              <span className="slider" />
-            </label>
-            <span className="hint">检查所有下载链接的文件版本，发现更新自动下载</span>
-          </div>
-        </div>
+        <StartupTaskSetting
+          title="启动时同步库"
+          enabled={settings.autoSyncLibraryOnStartup}
+          interval={settings.startupLibrarySyncIntervalDays}
+          range={STARTUP_INTERVALS.library}
+          unit="天"
+          onToggle={(enabled) => void patch({ autoSyncLibraryOnStartup: enabled })}
+          onInterval={(days) => void patch({ startupLibrarySyncIntervalDays: days })}
+          hint="与顶部「同步库」执行相同操作，从上次库同步完成起计时。"
+        />
+        <StartupTaskSetting
+          title="启动时检查文件更新"
+          enabled={settings.autoCheckItemApiOnStartup}
+          interval={settings.startupMetadataCheckIntervalHours}
+          range={STARTUP_INTERVALS.itemApi}
+          unit="小时"
+          onToggle={(enabled) => void patch({ autoCheckItemApiOnStartup: enabled })}
+          onInterval={(hours) => void patch({ startupMetadataCheckIntervalHours: hours })}
+          autoDownload={{
+            enabled: settings.autoDownloadStartupApiUpdates,
+            onToggle: (enabled) => void patch({ autoDownloadStartupApiUpdates: enabled })
+          }}
+          hint="启动时用同一次 BOOTH 商品 API 请求检查标题、简介、视频、画廊和已购文件，按商品独立计时，默认 2 小时。详情变化时刷新商品页，文件变化时核对购买库。自动下载开关仅控制确认更新的素材文件。"
+        />
+        <StartupTaskSetting
+          title="自动强制检查全部文件更新"
+          enabled={settings.autoForceCheckFilesOnStartup}
+          interval={settings.startupFullFileCheckIntervalDays}
+          range={STARTUP_INTERVALS.fullFiles}
+          unit="天"
+          onToggle={(enabled) => void patch({ autoForceCheckFilesOnStartup: enabled })}
+          onInterval={(days) => void patch({ startupFullFileCheckIntervalDays: days })}
+          autoDownload={{
+            enabled: settings.autoDownloadStartupFullCheckUpdates,
+            onToggle: (enabled) => void patch({ autoDownloadStartupFullCheckUpdates: enabled })
+          }}
+          hint="逐个探测已登记下载链接的文件指纹，首次间隔从资源库首次同步成功起算。"
+        />
         <div className="setting-row">
           <div className="label">启动时修复本地图片</div>
           <div className="value">
@@ -396,37 +461,6 @@ export default function SettingsPage({
               <span className="slider" />
             </label>
             <span className="hint">启动时补下上次未完成的原图，并补齐缺失的缩略图/预览图；不受检查间隔限制</span>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="label">检测到更新自动下载</div>
-          <div className="value">
-            <label className="switch">
-              <input
-                type="checkbox"
-                checked={settings.autoDownloadUpdates}
-                onChange={(e) => void patch({ autoDownloadUpdates: e.target.checked })}
-              />
-              <span className="slider" />
-            </label>
-            <span className="hint">关闭后只标记更新，由你手动确认下载</span>
-          </div>
-        </div>
-        <div className="setting-row">
-          <div className="label">启动检查最小间隔</div>
-          <div className="value">
-            <input
-              type="text"
-              style={{ width: 70 }}
-              value={settings.startupCheckIntervalDays}
-              onChange={(e) => {
-                const v = Math.max(0, Math.min(365, Math.floor(Number(e.target.value) || 0)))
-                void patch({ startupCheckIntervalDays: v })
-              }}
-            />
-            <span className="hint">
-              天。距上次全局检查不足该间隔时跳过（0 = 每次启动都检查）。不影响手动检查；商品库与文件检查各自独立按上次全局时间判断
-            </span>
           </div>
         </div>
         <div className="setting-row">
@@ -518,7 +552,7 @@ export default function SettingsPage({
           <div className="value">{settings.lastLibrarySyncAt ? formatTime(settings.lastLibrarySyncAt) : '从未'}</div>
         </div>
         <div className="setting-row">
-          <div className="label">上次全局检查</div>
+          <div className="label">上次全量文件检查</div>
           <div className="value">{settings.lastGlobalCheckAt ? formatTime(settings.lastGlobalCheckAt) : '从未'}</div>
         </div>
       </div>

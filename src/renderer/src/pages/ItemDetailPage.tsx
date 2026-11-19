@@ -572,6 +572,7 @@ export default function ItemDetailPage({
 }) {
   const [item, setItem] = useState<ItemDetailRow | null>(null)
   const [checking, setChecking] = useState(false)
+  const [retryingFileApi, setRetryingFileApi] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [showDelete, setShowDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -703,7 +704,12 @@ export default function ItemDetailPage({
     setChecking(true)
     try {
       const s = await api.updates.checkItem(itemId)
-      toast('info', `检查完成：${s.filesChecked} 个链接，${s.filesUpdated} 个有更新${s.downloaded ? `，已自动下载 ${s.downloaded} 个` : ''}`)
+      const abnormal = s.apiAbnormalItemIds ?? []
+      toast(s.failed || abnormal.length ? 'warn' : 'info', [
+        `检查完成：${s.filesChecked} 个链接，${s.filesUpdated} 个有更新`,
+        abnormal.length && `存在 API 异常的商品 BOOTH 号 ${abnormal.map((id) => `#${id}`).join('、')}`,
+        s.failed && `${s.failed} 项核对失败`
+      ].filter(Boolean).join(' · '))
       await load()
       onChanged()
     } catch (e) {
@@ -713,7 +719,20 @@ export default function ItemDetailPage({
     }
   }
 
-  // 只刷新本商品的商店页数据（不抓列表、不下载文件）
+  const retryFileApi = async (): Promise<void> => {
+    setRetryingFileApi(true)
+    try {
+      const restored = await api.updates.retryItemFileApi(itemId)
+      toast(restored ? 'info' : 'warn', restored ? '已恢复商品文件 API 检查' : '文件更新 API 异常仍未解除')
+      await load()
+    } catch (error) {
+      toast('error', `重试 API 失败：${error instanceof Error ? error.message : error}`)
+    } finally {
+      setRetryingFileApi(false)
+    }
+  }
+
+  // 先检查本商品的公开详情，必要时刷新商店页。
   const doRefresh = async (): Promise<void> => {
     setRefreshing(true)
     try {
@@ -725,7 +744,8 @@ export default function ItemDetailPage({
         r.descriptionChanged && '简介'
       ].filter(Boolean)
       const message = r.notFound ? '商品详情页返回 404，已保留本地详情'
-        : r.changed ? `${changes.join('、')}已更新` : '商品页已检查，没有变化'
+        : r.skippedHtml ? '商品 API 检查完成，无需刷新商品页'
+          : r.changed ? `${changes.join('、')}已更新` : '商品页已检查，没有变化'
       toast(r.notFound ? 'warn' : 'info', [
         message,
         r.snapshotSaved && '已保存历史版本',
@@ -995,11 +1015,18 @@ export default function ItemDetailPage({
             <div className="side-stats">
               <span>{item.fileDownloaded} / {item.fileTotal} 已下载</span>
               {item.fileUpdateAvailable > 0 && <span className="badge update">{item.fileUpdateAvailable} 个待更新</span>}
+              {item.fileUpdateApiStatus?.pending && <span className="badge update">API 发现变化，待检查</span>}
+              {item.fileUpdateApiStatus?.abnormal && <span className="badge missing">文件更新 API 异常</span>}
             </div>
             <div className="side-actions">
-              <button onClick={() => void doCheck()} disabled={checking}>
+              <button onClick={() => void doCheck()} disabled={checking || retryingFileApi}>
                 {checking ? '检查中…' : '🔍 检查当前商品下载文件更新'}
               </button>
+              {item.fileUpdateApiStatus?.abnormal && (
+                <button onClick={() => void retryFileApi()} disabled={checking || retryingFileApi}>
+                  {retryingFileApi ? '重试中…' : '重试 API'}
+                </button>
+              )}
               <button className="primary" onClick={() => void doDownloadItem()}>
                 ⬇ 下载全部文件
               </button>

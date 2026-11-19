@@ -13,12 +13,32 @@ export interface DownloadableRef {
 
 /** 库列表页解析出的商品条目 */
 export interface LibraryItem {
+  /** 购买库卡片确认的变体，包含共享同一下载 ID 的关联。 */
+  purchasedVariationIds?: number[]
   itemId: number
   title: string
   itemUrl: string
   thumbnailUrl: string
   isGift: boolean
   downloadables: DownloadableRef[]
+  /** 完整校验的卡片原始链接，保留同一下载 ID 的变体关联。 */
+  verifiedDownloadables?: DownloadableRef[]
+  downloadablesIncomplete?: boolean
+}
+
+export interface ItemFileUpdateStatus {
+  itemId: number
+  title: string
+  pending: boolean
+  abnormal: boolean
+}
+
+export interface ApiFileCheckResult {
+  scanned: number
+  checked: number
+  abnormalItemIds: number[]
+  updated: number
+  failed: number
 }
 
 /** deeplink 解析结果（签名直链，180 秒过期，绝不入库） */
@@ -89,6 +109,7 @@ export interface ItemSummary {
 }
 
 export interface ItemDetailRow extends ItemSummary {
+  fileUpdateApiStatus?: ItemFileUpdateStatus | null
   itemUrl: string
   ogImageUrl: string | null
   descriptionHtml: string
@@ -131,9 +152,9 @@ export interface DownloadDoneEvent {
 }
 
 export interface CheckProgressEvent {
-  phase: 'library' | 'files' | 'download'
+  phase: 'library' | 'files' | 'item-api' | 'download'
   current: number
-  total: number
+  total: number // A zero total without a label clears the finished progress row.
   label?: string
 }
 
@@ -160,11 +181,13 @@ export interface PriceStatsResult {
 }
 
 export interface CheckSummary {
+  apiAbnormalItemIds?: number[]
   libraryChecked: number
   libraryChanged: number
   library?: LibrarySyncStats
   filesChecked: number
   filesUpdated: number
+  filesRemaining?: number
   downloaded: number
   failed: number
 }
@@ -181,6 +204,7 @@ export interface RefreshItemResult {
   snapshotSaved: boolean
   imagesPending: number
   notFound?: boolean
+  skippedHtml?: boolean
 }
 
 export interface LibrarySyncStats {
@@ -219,6 +243,12 @@ export interface DeepLinkHostPrompt {
   selfPath: string
 }
 
+export const STARTUP_INTERVALS = {
+  library: { min: 0, max: 14, defaultValue: 7 },
+  itemApi: { min: 1, max: 23, defaultValue: 2 },
+  fullFiles: { min: 15, max: 60, defaultValue: 30 }
+} as const
+
 export interface Settings {
   /** 下载根绝对路径（运行时解析：默认值随 exe 所在位置变化） */
   downloadRoot: string
@@ -235,17 +265,24 @@ export interface Settings {
   logRetentionDays: number
   /** 启动时自动同步商品库（元数据/简介/宣传图） */
   autoSyncLibraryOnStartup: boolean
-  /** 启动时自动检查文件更新 */
-  autoCheckFilesOnStartup: boolean
-  /** 启动时检查并修复图片（补下未完成的原图、补齐缩略图/预览图）；不受 startupCheckIntervalDays 限制 */
+  /** 启动时对到期商品检查 BOOTH 商品 API。 */
+  autoCheckItemApiOnStartup: boolean
+  autoDownloadStartupApiUpdates: boolean
+  /** 启动时逐个探测已登记的下载链接。 */
+  autoForceCheckFilesOnStartup: boolean
+  autoDownloadStartupFullCheckUpdates: boolean
+  /** 启动时检查并修复图片（补下未完成的原图、补齐缩略图/预览图）。 */
   autoCheckImagesOnStartup: boolean
   /** 主题模式 */
   themeMode: 'dark' | 'light'
   /** 全局主题色（accent，hex） */
   themeAccent: string
-  /** 启动自动检查的最小间隔（天）。0 = 禁用间隔，每次启动都检查 */
-  startupCheckIntervalDays: number
-  autoDownloadUpdates: boolean
+  /** 启动同步库间隔（天）。0 表示每次启动都同步。 */
+  startupLibrarySyncIntervalDays: number
+  /** 启动商品 API 检查间隔（小时），每个商品分别计时。 */
+  startupMetadataCheckIntervalHours: number
+  /** 启动全量文件检查间隔（天）。 */
+  startupFullFileCheckIntervalDays: number
   downloadConcurrency: number
   minRequestIntervalMs: number
   /** 代理模式：system=跟随 Windows 系统代理（默认，Chrome 同款监听系统设置变化）；custom=自定义代理；direct=直连 */
@@ -253,6 +290,7 @@ export interface Settings {
   /** 自定义代理地址（proxyMode=custom 时生效），如 http://127.0.0.1:7890 / socks5://127.0.0.1:1080 */
   customProxy: string
   lastLibrarySyncAt: string | null
+  firstLibrarySyncAt: string | null
   lastGlobalCheckAt: string | null
 }
 

@@ -30,10 +30,25 @@ it('rejects sibling paths, directories and junction escapes', () => {
   expect(() => allowedFile(join(root, 'escape', 'secret'), [root])).toThrow()
 })
 it('rejects unknown, internal and invalid settings before applying anything', () => {
-  for (const patch of [{ lastGlobalCheckAt: 'x' }, { downloadRootMissing: false }, { themeAccent: 'red' }, { downloadConcurrency: 0 }, { autoDownloadUpdates: 'yes' }]) {
+  for (const patch of [{ lastGlobalCheckAt: 'x' }, { downloadRootMissing: false }, { themeAccent: 'red' }, { downloadConcurrency: 0 },
+    { autoDownloadStartupApiUpdates: 'yes' }, { autoDownloadStartupFullCheckUpdates: 'yes' }, { autoDownloadUpdates: true }]) {
     expect(settingsPatch.safeParse(patch).success).toBe(false)
   }
   expect(settingsPatch.parse({ themeAccent: '#123aBc', downloadConcurrency: 3 })).toEqual({ themeAccent: '#123aBc', downloadConcurrency: 3 })
+})
+it('validates the independent startup intervals at the IPC boundary', () => {
+  expect(settingsPatch.safeParse({
+    startupLibrarySyncIntervalDays: 0, startupMetadataCheckIntervalHours: 1, startupFullFileCheckIntervalDays: 60
+  }).success).toBe(true)
+  for (const patch of [
+    { startupLibrarySyncIntervalDays: 15 },
+    { startupMetadataCheckIntervalHours: 0 },
+    { startupMetadataCheckIntervalHours: 24 },
+    { startupFullFileCheckIntervalDays: 14 },
+    { startupFullFileCheckIntervalDays: 61 }
+  ]) {
+    expect(settingsPatch.safeParse(patch).success).toBe(false)
+  }
 })
 it('serves bounded and suffix media ranges and rejects invalid ranges', () => {
   expect(byteRange('bytes=2-4', 10)).toEqual({ start: 2, end: 4 })

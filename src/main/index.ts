@@ -8,6 +8,7 @@ import { findProtocolArg, handleProtocolUrl, focusMainWindow, BOOTH_PROTOCOL } f
 import { createLogger, onLogWritten } from './util/log'
 import { resolveDataDir, resolveDevRoot } from './util/dataDir'
 import { cleanupLogs } from './services/logService'
+import { apiFileCheckToast } from './services/itemFileUpdates'
 import { isWebUrl } from './util/externalUrl'
 import { allowedFile } from './util/pathAccess'
 import { byteRange } from './util/byteRange'
@@ -422,7 +423,6 @@ if (!gotLock) {
         }
       }
     }
-    ctx.startup.onProgress = (e) => emit('event:checkProgress', e)
     ctx.startup.onAuthExpired = (msg) => emit('event:authExpired', msg)
     // 日志实时推送：合并 300ms 内的多次写入，避免日志密集时频繁刷新
     let logPushTimer: NodeJS.Timeout | null = null
@@ -438,10 +438,23 @@ if (!gotLock) {
       log.info('BOOTH_NO_STARTUP set, skip startup sync')
       return
     }
-    void ctx.startup.runOnStartup().then((result) => {
+    void ctx.startup.runOnStartup(async ({ intervalHours, enqueueUpdates, ...options }) => {
+      if (!ctx) return
+      const { fileUpdates, sync } = ctx
+      try {
+        const result = await fileUpdates.checkApiUpdates(async (onItem, onProgress) => {
+          if (await sync.pollItemMetadataOnStartup(intervalHours, onItem, onProgress)) emit('event:libraryMetadataChanged', undefined)
+        }, enqueueUpdates, options)
+        if (result.scanned || result.failed) emit('event:toast', apiFileCheckToast(result))
+      } catch (error) {
+        log.warn('startup item API check failed:', error)
+      }
+    }).then((result) => {
       if (result.summary) emit('event:libraryUpdated', result.summary)
       if (result.error) {
         emit('event:toast', { level: 'error', message: `启动检查中止：${result.error}` })
+      } else if (result.summary?.filesRemaining) {
+        emit('event:toast', { level: 'warn', message: `全量文件检查还有 ${result.summary.filesRemaining} 个链接待续查` })
       } else if (result.authError) {
         log.warn('startup auth:', result.authError)
       }

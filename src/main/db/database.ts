@@ -4,7 +4,7 @@ import initSqlJs, { Database } from 'sql.js'
 import { createLogger } from '../util/log'
 
 const log = createLogger('db')
-const SCHEMA_VERSION = 15
+const SCHEMA_VERSION = 17
 
 /**
  * SQLite (sql.js / WASM) 封装。
@@ -189,6 +189,27 @@ export class Db {
             OR url LIKE 'https://booth.pximg.net/c/620x620/%')`)
         this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (15, datetime('now'))`)
       })
+    }
+    if (Number(version) < 16) {
+      const columns = this.db.exec('PRAGMA table_info(items)')[0]?.values ?? []
+      if (!columns.some((column) => column[1] === 'api_metadata_hash')) {
+        this.db.run('ALTER TABLE items ADD COLUMN api_metadata_hash TEXT')
+      }
+      if (!columns.some((column) => column[1] === 'api_metadata_checked_at')) {
+        this.db.run('ALTER TABLE items ADD COLUMN api_metadata_checked_at INTEGER')
+      }
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (16, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 016_item_api_metadata')
+    }
+    if (Number(version) < 17) {
+      const columns = this.db.exec('PRAGMA table_info(items)')[0]?.values ?? []
+      if (!columns.some((column) => column[1] === 'api_file_update_state')) {
+        this.db.run('ALTER TABLE items ADD COLUMN api_file_update_state TEXT')
+      }
+      this.db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES (17, datetime('now'))`)
+      this.markDirty()
+      log.info('migrations applied: 017_item_api_file_updates')
     }
   }
 

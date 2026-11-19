@@ -6,6 +6,8 @@ import type {
   CheckProgressEvent,
   CheckSummary,
   PriceStatsResult,
+  ItemFileUpdateStatus,
+  ApiFileCheckResult,
   RefreshItemResult,
   RemoveItemResult,
   DownloadProgressEvent,
@@ -90,6 +92,9 @@ export interface BoothAPI {
   updates: {
     checkGlobal(): Promise<CheckSummary>
     checkItem(id: number): Promise<CheckSummary>
+    itemFileStatuses(): Promise<ItemFileUpdateStatus[]>
+    checkApiFiles(): Promise<ApiFileCheckResult>
+    retryItemFileApi(id: number): Promise<boolean>
     listAvailable(): Promise<Array<Record<string, unknown>>>
   }
   downloads: {
@@ -97,6 +102,7 @@ export interface BoothAPI {
     enqueueItem(itemId: number, source: DownloadSource): Promise<number>
     /** 开始全部：把待下载全部入队并立即开始（不动已完成/失败），返回队列统计 */
     startAll(source: DownloadSource): Promise<DownloadStats>
+    startUpdates(itemId?: number): Promise<number>
     redownloadAll(): Promise<number>
     redownloadItem(itemId: number): Promise<number>
     /** @deprecated 语义同 startAll */
@@ -172,6 +178,8 @@ export interface BoothAPI {
   }
   events: {
     onLibraryUpdated(cb: (summary: CheckSummary) => void): () => void
+    onLibraryMetadataChanged(cb: () => void): () => void
+    onItemFileUpdatesChanged(cb: () => void): () => void
     onCheckProgress(cb: (e: CheckProgressEvent) => void): () => void
     onDownloadProgress(cb: (e: DownloadProgressEvent) => void): () => void
     onDownloadDone(cb: (e: DownloadDoneEvent) => void): () => void
@@ -235,12 +243,16 @@ const api: BoothAPI = {
   updates: {
     checkGlobal: () => ipcRenderer.invoke('updates:checkGlobal'),
     checkItem: (id) => ipcRenderer.invoke('updates:checkItem', id),
+    itemFileStatuses: () => ipcRenderer.invoke('updates:itemFileStatuses'),
+    checkApiFiles: () => ipcRenderer.invoke('updates:checkApiFiles'),
+    retryItemFileApi: (id) => ipcRenderer.invoke('updates:retryItemFileApi', id),
     listAvailable: () => ipcRenderer.invoke('updates:listAvailable')
   },
   downloads: {
     enqueue: (ids, source) => ipcRenderer.invoke('downloads:enqueue', ids, source),
     enqueueItem: (itemId, source) => ipcRenderer.invoke('downloads:enqueueItem', itemId, source),
     startAll: (source) => ipcRenderer.invoke('downloads:startAll', source),
+    startUpdates: (itemId) => ipcRenderer.invoke('downloads:startUpdates', itemId),
     redownloadAll: () => ipcRenderer.invoke('downloads:redownloadAll'),
     redownloadItem: (itemId) => ipcRenderer.invoke('downloads:redownloadItem', itemId),
     enqueueAll: (source) => ipcRenderer.invoke('downloads:startAll', source),
@@ -303,6 +315,8 @@ const api: BoothAPI = {
   },
   events: {
     onLibraryUpdated: (cb) => subscribe('event:libraryUpdated', cb),
+    onLibraryMetadataChanged: (cb) => subscribe('event:libraryMetadataChanged', cb),
+    onItemFileUpdatesChanged: (cb) => subscribe('event:itemFileUpdatesChanged', cb),
     onCheckProgress: (cb) => subscribe('event:checkProgress', cb),
     onDownloadProgress: (cb) => subscribe('event:downloadProgress', cb),
     onDownloadDone: (cb) => subscribe('event:downloadDone', cb),

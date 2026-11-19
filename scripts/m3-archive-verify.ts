@@ -30,12 +30,12 @@ async function main() {
     const archivedBefore = existsSync(historyDir) ? readdirSync(historyDir) : []
     console.log(`history before: ${JSON.stringify(archivedBefore)}`)
 
-    // 篡改指纹 → 检查 → 检测到“更新” → 自动下载
-    ctx.settings.set({ autoDownloadUpdates: true })
+    // 篡改指纹 → 检查 → 下载确认的更新
     ctx.repo.run('UPDATE downloadables SET last_etag = ? WHERE downloadable_id = ?', ['SIMULATED_ETAG_2', f.downloadableId])
     const summary = await ctx.checker.checkItem(target.itemId)
     console.log('check:', JSON.stringify(summary))
-    if (summary.filesUpdated < 1) throw new Error('未检测到模拟更新')
+    if (ctx.repo.getDownloadable(f.downloadableId)?.status !== 'update_available') throw new Error('未检测到模拟更新')
+    ctx.downloads.enqueue(f.downloadableId, 'update')
 
     // 等队列
     for (let i = 0; i < 1200; i++) {
