@@ -9,7 +9,7 @@ import type { ItemMetadataChecks } from './itemMetadataChecks'
 import type { ItemFileUpdates } from './itemFileUpdates'
 import type { ReadBoothItem } from '../booth/itemApi'
 import { retireMissingDownloadLinks } from './libraryDownloadLinks'
-import type { CheckProgressEvent, CheckSummary, ItemDetail, LibraryItem, LibrarySyncStats, RefreshItemResult } from '../../shared/types'
+import type { ApiMetadataCheckResult, CheckProgressEvent, CheckSummary, ItemDetail, LibraryItem, LibrarySyncStats, RefreshItemResult } from '../../shared/types'
 import { librarySummary } from '../../shared/librarySyncSummary'
 import { BoothError, isAuthError } from '../booth/errors'
 import { createLogger } from '../util/log'
@@ -69,6 +69,18 @@ export class LibrarySyncService {
     if (!this.metadataChecks) return this.refreshItem(itemId)
     const result = await this.metadataChecks.checkManually(itemId, (id) => this.refreshItem(id))
     return result ?? { ...noDetailChange, skippedHtml: true }
+  }
+
+  async checkAllItemMetadata(): Promise<ApiMetadataCheckResult> {
+    if (this.running || this.fileUpdates?.isRunning) throw new Error('库同步或商品检查已在进行中')
+    if (!this.metadataChecks) throw new Error('商品 API 检查不可用')
+    this.running = true
+    try {
+      return await this.metadataChecks.checkAll((id) => this.refreshItem(id), (event) => this.onProgress?.(event))
+    } finally {
+      this.running = false
+      this.onProgress?.({ phase: 'item-metadata', current: 0, total: 0 })
+    }
   }
 
   async sync(verifiedItems?: Map<number, ScopedLibraryItem>): Promise<CheckSummary> {

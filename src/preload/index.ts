@@ -8,6 +8,7 @@ import type {
   PriceStatsResult,
   ItemFileUpdateStatus,
   ApiFileCheckResult,
+  ApiMetadataCheckResult,
   RefreshItemResult,
   RemoveItemResult,
   DownloadProgressEvent,
@@ -79,6 +80,7 @@ export interface BoothAPI {
     openItemPage(id: number): Promise<void>
     openItemDir(id: number): Promise<string>
     refreshItem(id: number): Promise<RefreshItemResult>
+    checkAllItemMetadata(): Promise<ApiMetadataCheckResult>
     deleteItem(id: number): Promise<RemoveItemResult>
   }
   tags: {
@@ -230,6 +232,7 @@ const api: BoothAPI = {
     openItemPage: (id) => ipcRenderer.invoke('library:openItemPage', id),
     openItemDir: (id) => ipcRenderer.invoke('library:openItemDir', id),
     refreshItem: (id) => ipcRenderer.invoke('library:refreshItem', id),
+    checkAllItemMetadata: () => ipcRenderer.invoke('library:checkAllItemMetadata'),
     deleteItem: (id) => ipcRenderer.invoke('library:deleteItem', id)
   },
   tags: {

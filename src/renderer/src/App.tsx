@@ -124,6 +124,7 @@ export default function App() {
   const [progress, setProgress] = useState<CheckProgressEvent | null>(null)
   const [apiProgress, setApiProgress] = useState<CheckProgressEvent | null>(null)
   const [checkingApiFiles, setCheckingApiFiles] = useState(false)
+  const [checkingMetadata, setCheckingMetadata] = useState(false)
   const [libraryVersion, setLibraryVersion] = useState(0) // 变化时触发子页面刷新
   /** 最近一次完成的确认（底栏最下行，状态确认用） */
   const [lastCompleted, setLastCompleted] = useState<string | null>(null)
@@ -346,8 +347,25 @@ export default function App() {
     }
   }
 
+  const doCheckMetadata = async (): Promise<void> => {
+    setCheckingMetadata(true)
+    try {
+      const result = await api.library.checkAllItemMetadata()
+      const failed = result.failed ? `，${result.failed} 个检查失败` : ''
+      const message = result.checked || result.failed
+        ? `商品详情检查完成：已检查 ${result.checked} 个，刷新 ${result.refreshed} 个商品页面${failed}`
+        : '资源库中没有可检查的商品'
+      setLastCompleted(message)
+      pushToast(result.failed ? 'warn' : 'info', message)
+    } catch (error) {
+      pushToast('error', `商品详情检查失败：${error instanceof Error ? error.message : error}`)
+    } finally {
+      setCheckingMetadata(false)
+    }
+  }
+
   if (!settings) return <div className="empty">加载中…</div>
-  const checkBusy = progress !== null || apiProgress !== null || checkingApiFiles
+  const checkBusy = progress !== null || apiProgress !== null || checkingApiFiles || checkingMetadata
 
   return (
     <div className="app">
@@ -360,6 +378,9 @@ export default function App() {
         </button>
         <button onClick={() => void doCheckApiFiles()} disabled={checkBusy} title="通过 BOOTH 商品 API 检查文件变化并核对购买库">
           {checkingApiFiles || apiProgress ? '检查文件更新中…' : '检查文件更新'}
+        </button>
+        <button onClick={() => void doCheckMetadata()} disabled={checkBusy} title="通过 BOOTH 商品 API 检查库内商品的标题、简介、视频和画廊">
+          {checkingMetadata || progress?.phase === 'item-metadata' ? '检查商品详情中…' : '检查商品详情更新'}
         </button>
         <button
           className="primary"
@@ -456,7 +477,8 @@ export default function App() {
         {[progress, apiProgress].map((check) => {
           if (!check) return null
           const label = check.phase === 'library' ? '同步商品库'
-            : check.phase === 'item-api' ? 'API 检查文件更新' : '检查文件更新'
+            : check.phase === 'item-api' ? 'API 检查文件更新'
+            : check.phase === 'item-metadata' ? 'API 检查商品详情' : '检查文件更新'
           return (
             <div className="status-line active" key={check.phase}>
               <span className="status-label">

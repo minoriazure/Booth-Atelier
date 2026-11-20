@@ -41,6 +41,12 @@ export interface ApiFileCheckResult {
   failed: number
 }
 
+export interface ApiMetadataCheckResult {
+  checked: number
+  refreshed: number
+  failed: number
+}
+
 /** deeplink 解析结果（签名直链，180 秒过期，绝不入库） */
 export interface DeeplinkResult {
   dlurl: string
@@ -152,7 +158,7 @@ export interface DownloadDoneEvent {
 }
 
 export interface CheckProgressEvent {
-  phase: 'library' | 'files' | 'item-api' | 'download'
+  phase: 'library' | 'files' | 'item-api' | 'item-metadata' | 'download'
   current: number
   total: number // A zero total without a label clears the finished progress row.
   label?: string

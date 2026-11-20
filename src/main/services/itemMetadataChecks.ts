@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio'
-import { STARTUP_INTERVALS, type CheckProgressEvent, type RefreshItemResult } from '../../shared/types'
+import { STARTUP_INTERVALS, type ApiMetadataCheckResult, type CheckProgressEvent, type RefreshItemResult } from '../../shared/types'
 import type { ReadBoothItem } from '../booth/itemApi'
 import { parseVideoUrl, sha256Hex } from '../booth/itemPageParser'
 import type { LibraryRepo } from '../db/repos'
@@ -85,6 +85,28 @@ export class ItemMetadataChecks {
       }
     }
     return refreshed
+  }
+
+  async checkAll(refreshHtml: RefreshHtml, onProgress: (event: CheckProgressEvent) => void): Promise<ApiMetadataCheckResult> {
+    const result: ApiMetadataCheckResult = { checked: 0, refreshed: 0, failed: 0 }
+    const itemIds = this.repo.listAllItemIds()
+    for (const [index, itemId] of itemIds.entries()) {
+      if (this.stopped) break
+      onProgress({ phase: 'item-metadata', current: index, total: itemIds.length, label: `商品 #${itemId}` })
+      try {
+        const detail = await this.check(itemId, { refreshHtml })
+        if (detail?.notFound) {
+          result.failed++
+          continue
+        }
+        result.checked++
+        if (detail) result.refreshed++
+      } catch (error) {
+        result.failed++
+        log.warn(`商品 #${itemId} 批量详情检查失败：`, error instanceof Error ? error.message : error)
+      }
+    }
+    return result
   }
 
   checkManually(itemId: number, refreshHtml: RefreshHtml): Promise<RefreshItemResult | null> {

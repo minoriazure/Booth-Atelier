@@ -171,6 +171,40 @@ it('seeds the API baseline on initial sync, checks details directly on subsequen
   expect(readItem).toHaveBeenCalledTimes(apiCalls + 1)
 })
 
+it('checks all local item details through the API without consuming the startup file check interval', async () => {
+  const failedId = itemId - 1
+  const unchangedId = itemId + 1
+  const checkedAt = Date.now()
+  for (const id of [failedId, itemId, unchangedId]) {
+    repo.upsertFromList({ itemId: id, title: 'Item', thumbnailUrl: '', isGift: false, downloadables: [] })
+    repo.updateDetail({
+      itemId: id, title: 'Item', descriptionHtml: '<p>Original</p>', ogImageUrl: null,
+      galleryUrls: [], shopName: null, metadataHash: 'existing-html'
+    })
+    repo.saveItemMetadataCheckHash(id, itemApiMetadataHash(apiDetail))
+    repo.markItemMetadataChecked(id, checkedAt)
+  }
+  const readItem = vi.fn(async (id: number) => {
+    if (id === failedId) throw new Error('API down')
+    return { ...apiDetail, id, description: id === itemId ? 'New description' : apiDetail.description }
+  })
+  const fetch = vi.fn(async () => parseItemPage(
+    '<meta property="og:title" content="Item"><section><div class="js-market-item-detail-description"><p>New description</p></div></section>', itemId
+  ))
+  const observeFiles = vi.fn()
+  const sync = new LibrarySyncService({} as LibraryCrawler, { fetch } as unknown as ItemPageParser,
+    repo, new HistoryManager(repo, paths), {} as ImageLocalizer, undefined, new ItemMetadataChecks(repo, readItem, observeFiles))
+  sync.onProgress = vi.fn()
+
+  expect(await sync.checkAllItemMetadata()).toEqual({ checked: 2, refreshed: 1, failed: 1 })
+  expect(readItem).toHaveBeenCalledTimes(3)
+  expect(fetch).toHaveBeenCalledExactlyOnceWith(itemId)
+  expect(repo.getItemDetail(itemId)?.descriptionHtml).toContain('<p>New description</p>')
+  expect(repo.getItemMetadataCheck(itemId)?.checkedAt).toBe(checkedAt)
+  expect(observeFiles).not.toHaveBeenCalled()
+  expect(sync.onProgress).toHaveBeenLastCalledWith({ phase: 'item-metadata', current: 0, total: 0 })
+})
+
 it('falls back to HTML only for manual API failures and retries a known change after an HTML failure', async () => {
   repo.upsertFromList({ itemId, title: 'Item', thumbnailUrl: '', isGift: false, downloadables: [] })
   repo.saveItemMetadataCheckHash(itemId, itemApiMetadataHash(apiDetail))
